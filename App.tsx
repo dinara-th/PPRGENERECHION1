@@ -50,7 +50,10 @@ import {
   Paperclip,
   BookMarked,
   Library,
-  Scissors
+  Scissors,
+  BarChart3,
+  PlayCircle,
+  RefreshCw
 } from 'lucide-react';
 import { ProjectData, DocumentType, DocSection, WorkingDoc, SavedProject, ConstructionObject, ClientEntry, ContractorEntry, ReferenceFile } from './types';
 import { generateSectionContent, extractDocInfo, extractWorksFromEstimate } from './geminiService';
@@ -129,16 +132,6 @@ const INITIAL_WORK_CATALOG: WorkCatalogNode = {
       "Замоноличивание стыков и швов"
     ]
   },
-  "Каменные работы (ФЕР-08)": {
-    "Кладка стен и перегородок": [
-      "Кирпичная кладка наружных стен с облицовкой",
-      "Кладка внутренних стен из керамического кирпича",
-      "Возведение стен из газобетонных и пеноблоков",
-      "Устройство перегородок из ПГП и ячеистого бетона",
-      "Кладка из природного камня (бутовая кладка)",
-      "Армирование каменных конструкций"
-    ]
-  },
   "Металлоконструкции (ФЕР-09)": {
     "Монтаж несущих конструкций": [
       "Монтаж стальных колонн и вертикальных связей",
@@ -152,62 +145,6 @@ const INITIAL_WORK_CATALOG: WorkCatalogNode = {
       "Установка фахверка и конструкций остекления",
       "Монтаж путей подвесного транспорта",
       "Укрупнительная сборка МК на стапеле"
-    ],
-    "Защитные работы (ФЕР-13)": [
-      "Пескоструйная очистка металлоконструкций",
-      "Грунтование металлических поверхностей ГФ-021",
-      "Окраска МК эмалями и спецсоставами",
-      "Нанесение огнезащитных покрытий",
-      "Антикоррозионная защита сварных швов"
-    ]
-  },
-  "Монтаж оборудования (ФЕРм-03..12)": {
-    "Подъемно-транспортное (ФЕРм-03)": [
-      "Монтаж кранов мостовых электрических",
-      "Установка талей электрических и ручных",
-      "Монтаж лифтов пассажирских и грузовых",
-      "Установка подъемников мачтовых строительных",
-      "Монтаж ленточных конвейеров",
-      "Установка эскалаторов"
-    ],
-    "Теплосиловое оборудование (ФЕРм-06)": [
-      "Монтаж паровых котлов",
-      "Установка экономайзеров и воздухоподогревателей",
-      "Монтаж деаэрационных колонок",
-      "Установка теплообменников пластинчатых",
-      "Монтаж сетевых и питательных насосов"
-    ],
-    "Компрессоры и насосы (ФЕРм-07)": [
-      "Монтаж компрессорных агрегатов",
-      "Установка воздухосборников (ресиверов)",
-      "Монтаж центробежных насосов",
-      "Установка вакуум-насосов",
-      "Монтаж вентиляторов центробежных и осевых"
-    ],
-    "Электротехнические установки (ФЕРм-08)": [
-      "Монтаж силовых трансформаторов",
-      "Установка комплектных трансформаторных подстанций (КТП)",
-      "Монтаж распределительных щитов и шкафов (ГРЩ, ВРУ)",
-      "Прокладка шинопроводов магистральных",
-      "Монтаж аккумуляторных батарей",
-      "Устройство контура заземления",
-      "Монтаж опор и светильников наружного освещения"
-    ],
-    "Приборы и системы автоматизации (ФЕРм-11)": [
-      "Монтаж щитов и пультов автоматизации",
-      "Установка датчиков давления, температуры, расхода",
-      "Монтаж исполнительных механизмов (электроприводы)",
-      "Прокладка импульсных и командных трубопроводов",
-      "Установка контроллеров и модулей ввода-вывода",
-      "Монтаж систем пожарной сигнализации (АПС)"
-    ],
-    "Технологические трубопроводы (ФЕРм-12)": [
-      "Монтаж узлов трубопроводов из стальных труб",
-      "Монтаж трубопроводов из легированных сталей",
-      "Установка арматуры фланцевой (задвижки, клапаны)",
-      "Монтаж опорных конструкций под трубопроводы",
-      "Промывка и продувка трубопроводов",
-      "Испытание систем на прочность и герметичность"
     ]
   }
 };
@@ -296,7 +233,6 @@ export default function App() {
   const [isDictDropdownOpen, setIsDictDropdownOpen] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
   const [expandedTks, setExpandedTks] = useState<Set<string>>(new Set());
-  
   const [isWorkDetailsExpanded, setIsWorkDetailsExpanded] = useState(true);
 
   const filteredProjects = useMemo(() => {
@@ -550,49 +486,82 @@ export default function App() {
     }
   };
 
+  const generateSinglePprSection = async (idx: number) => {
+    if (isGeneratingAll) return;
+    const activeRefs = dictionaries.referenceLibrary;
+    setPprSections(prev => { const n = [...prev]; n[idx].status = 'generating'; return n; });
+    try {
+      const content = await generateSectionContent(project, pprSections[idx].title, `Генерация раздела ППР: ${pprSections[idx].title}`, activeRefs);
+      setPprSections(prev => { const n = [...prev]; n[idx].content = content; n[idx].status = 'completed'; return n; });
+      showNotification(`Раздел "${pprSections[idx].title}" сформирован`, 'success');
+    } catch (e) {
+      setPprSections(prev => { const n = [...prev]; n[idx].status = 'idle'; return n; });
+      showNotification("Ошибка при генерации раздела", 'error');
+    }
+  };
+
+  const generateSingleTkSection = async (work: string, secIdx: number) => {
+    if (isGeneratingAll) return;
+    const activeRefs = dictionaries.referenceLibrary;
+    const workSections = project.tkMap[work];
+    if (!workSections) return;
+
+    setProject(prev => {
+      const nextTkMap = { ...prev.tkMap };
+      const nextSections = [...nextTkMap[work]];
+      nextSections[secIdx].status = 'generating';
+      nextTkMap[work] = nextSections;
+      return { ...prev, tkMap: nextTkMap };
+    });
+
+    try {
+      const content = await generateSectionContent(
+        project, 
+        workSections[secIdx].title, 
+        `Генерация раздела ТК для работы "${work}": ${workSections[secIdx].title}`, 
+        activeRefs
+      );
+
+      setProject(prev => {
+        const nextTkMap = { ...prev.tkMap };
+        const nextSections = [...nextTkMap[work]];
+        nextSections[secIdx].content = content;
+        nextSections[secIdx].status = 'completed';
+        nextTkMap[work] = nextSections;
+        return { ...prev, tkMap: nextTkMap };
+      });
+      showNotification(`Раздел ТК "${workSections[secIdx].title}" готов`, 'success');
+    } catch (e) {
+      setProject(prev => {
+        const nextTkMap = { ...prev.tkMap };
+        const nextSections = [...nextTkMap[work]];
+        nextSections[secIdx].status = 'idle';
+        nextTkMap[work] = nextSections;
+        return { ...prev, tkMap: nextTkMap };
+      });
+      showNotification("Ошибка при генерации раздела ТК", 'error');
+    }
+  };
+
   const generateAllInOne = async () => {
     setIsGeneratingAll(true);
     const activeRefs = dictionaries.referenceLibrary;
     
-    // 1. Generate PPR Sections
     for (let i = 0; i < pprSections.length; i++) {
-      setPprSections(prev => { const n = [...prev]; n[i].status = 'generating'; return n; });
-      const content = await generateSectionContent(project, pprSections[i].title, `Генерация основного раздела ППР: ${pprSections[i].title}`, activeRefs);
-      setPprSections(prev => { const n = [...prev]; n[i].content = content; n[i].status = 'completed'; return n; });
+      if (pprSections[i].status === 'completed') continue;
+      await generateSinglePprSection(i);
     }
 
-    // 2. Generate TK Sections for each selected work
     for (const work of project.workType) {
       const sections = project.tkMap[work] || [];
       for (let j = 0; j < sections.length; j++) {
-        setProject(prev => {
-          const nextTkMap = { ...prev.tkMap };
-          const nextSections = [...nextTkMap[work]];
-          nextSections[j].status = 'generating';
-          nextTkMap[work] = nextSections;
-          return { ...prev, tkMap: nextTkMap };
-        });
-
-        const content = await generateSectionContent(
-          project, 
-          sections[j].title, 
-          `Генерация раздела "${sections[j].title}" Технологической Карты на вид работ: ${work}`, 
-          activeRefs
-        );
-
-        setProject(prev => {
-          const nextTkMap = { ...prev.tkMap };
-          const nextSections = [...nextTkMap[work]];
-          nextSections[j].content = content;
-          nextSections[j].status = 'completed';
-          nextTkMap[work] = nextSections;
-          return { ...prev, tkMap: nextTkMap };
-        });
+        if (sections[j].status === 'completed') continue;
+        await generateSingleTkSection(work, j);
       }
     }
 
     setIsGeneratingAll(false);
-    showNotification("Документ ППР со всеми вложенными ТК успешно сформирован", "success");
+    showNotification("Полная генерация документа завершена", "success");
   };
 
   const saveProjectVersion = () => {
@@ -612,7 +581,7 @@ export default function App() {
       setSavedProjects(prev => [newSavedProject, ...prev]);
       setProject(prev => ({ ...prev, id: newId, version: nextVersion }));
       setIsSaving(false);
-      showNotification(`Версия ${nextVersion} сохранена`, 'success');
+      showNotification(`Проект сохранен под версией ${nextVersion}`, 'success');
     }, 500);
   };
 
@@ -699,8 +668,28 @@ export default function App() {
     </div>
   );
 
-  // Global counter for pages
   let globalPageNum = 1;
+
+  const getGanttData = useMemo(() => {
+    const tasks = project.workType.map(wt => {
+      const dates = project.workDeadlines[wt]?.split(' - ') || [];
+      const start = dates[0] ? new Date(dates[0]) : null;
+      const end = dates[1] ? new Date(dates[1]) : null;
+      return { name: wt, start, end };
+    }).filter(t => t.start && t.end);
+
+    if (tasks.length === 0) return null;
+
+    const minDate = new Date(Math.min(...tasks.map(t => t.start!.getTime())));
+    const maxDate = new Date(Math.max(...tasks.map(t => t.end!.getTime())));
+    
+    const rangeStart = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    const rangeEnd = new Date(maxDate.getFullYear(), maxDate.getMonth() + 1, 0);
+    
+    const totalDays = Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    
+    return { tasks, rangeStart, rangeEnd, totalDays };
+  }, [project.workDeadlines, project.workType]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -791,38 +780,10 @@ export default function App() {
                     <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Исходные документы (РД)</h2>
                     {isUploading && <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />}
                   </div>
-                  
-                  {project.workingDocs.length > 0 && (
-                    <div className="space-y-2">
-                      {project.workingDocs.map((doc, idx) => (
-                        <div key={idx} className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-100 group">
-                          <div className="flex items-center gap-2 overflow-hidden">
-                            <Paperclip className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                            <span className="text-[10px] font-bold text-slate-600 truncate">{doc.name}</span>
-                          </div>
-                          <button onClick={() => setProject(p => ({...p, workingDocs: p.workingDocs.filter((_, i) => i !== idx)}))} className="p-1 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded-lg transition-colors">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
                   <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-all group shadow-sm">
                     <input type="file" ref={fileInputRef} className="hidden" multiple accept="application/pdf,image/*" onChange={handleFileUpload} />
                     <Upload className="w-8 h-8 text-slate-300 mx-auto mb-2 group-hover:text-blue-500 transition-colors" />
                     <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Загрузить документы РД</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Анализ сметы</h2>
-                  </div>
-                  <div onClick={() => estimateInputRef.current?.click()} className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-all group shadow-sm">
-                    <input type="file" ref={estimateInputRef} className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.xml" onChange={handleEstimateUpload} />
-                    <Calculator className="w-8 h-8 text-slate-300 mx-auto mb-2 group-hover:text-blue-500 transition-colors" />
-                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Импорт ведомости работ</p>
                   </div>
                 </div>
 
@@ -835,10 +796,10 @@ export default function App() {
                   </button>
                   {isWorkDetailsExpanded && (
                     <div className="space-y-4">
-                      <WorkTreeSelect label="Выбор из каталога (ФЕР/ФЕРм)" selectedItems={project.workType} onChange={(v) => updateProject('workType', v)} catalog={dictionaries.workCatalog} hasError={validationErrors.has('workType')} />
+                      <WorkTreeSelect label="Выбор из каталога" selectedItems={project.workType} onChange={(v) => updateProject('workType', v)} catalog={dictionaries.workCatalog} hasError={validationErrors.has('workType')} />
                       {project.workType.length > 0 && (
                         <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                          <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><Calendar className="w-3.5 h-3.5" /> График (даты)</h3>
+                          <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><Calendar className="w-3.5 h-3.5" /> Календарный план</h3>
                           {project.workType.map(wt => {
                             const [start, end] = (project.workDeadlines[wt] || " - ").split(' - ');
                             return (
@@ -859,10 +820,7 @@ export default function App() {
 
                 <div className="flex flex-col gap-3">
                   <button onClick={() => { if(validateProjectData()) setCurrentStep('edit'); }} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
-                    <PenLine className="w-5 h-5" /> Сформировать ППР и ТК
-                  </button>
-                  <button onClick={triggerSystemPrint} className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-black uppercase hover:bg-slate-200 transition-all flex items-center justify-center gap-2">
-                    <Printer className="w-4 h-4" /> Предварительный просмотр
+                    <PenLine className="w-5 h-5" /> Перейти к генерации
                   </button>
                 </div>
              </div>
@@ -871,24 +829,41 @@ export default function App() {
            {currentStep === 'edit' && (
              <div className="space-y-6 animate-in slide-in-from-left duration-300">
                 <div className="flex items-center justify-between">
-                   <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Разделы ППР</h2>
-                   <button onClick={generateAllInOne} disabled={isGeneratingAll} className="bg-blue-50 text-blue-600 p-2 rounded-lg flex items-center gap-2 text-[10px] font-black uppercase">
-                     {isGeneratingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} AI-Генерация всего
+                   <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Инженерный центр</h2>
+                   <button onClick={generateAllInOne} disabled={isGeneratingAll} className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-black uppercase hover:bg-blue-100 transition-all">
+                     {isGeneratingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} Сформировать всё
                    </button>
                 </div>
                 
                 <div className="space-y-2">
+                   <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Разделы ППР:</h3>
                    {pprSections.map((s, idx) => (
-                     <button key={s.id} onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth' })} className="w-full text-left p-3 rounded-xl border border-slate-100 hover:bg-slate-50 flex items-center justify-between text-xs font-bold transition-all group">
-                        <span className="truncate group-hover:text-blue-600">{idx + 1}. {s.title}</span>
-                        {s.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-                        {s.status === 'generating' && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
-                     </button>
+                     <div key={s.id} className={`group flex items-center justify-between p-3 rounded-xl border transition-all ${s.status === 'completed' ? 'bg-green-50 border-green-100' : 'bg-white border-slate-100 hover:border-blue-200'}`}>
+                        <button onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth' })} className="flex-1 text-left overflow-hidden">
+                           <span className={`text-xs font-bold block truncate transition-colors ${s.status === 'completed' ? 'text-green-700' : 'text-slate-700 group-hover:text-blue-600'}`}>{idx + 1}. {s.title}</span>
+                           <span className="text-[9px] font-medium text-slate-400 italic">
+                             {s.status === 'completed' ? 'Готов к печати' : s.status === 'generating' ? 'Идет обработка...' : 'Требует генерации'}
+                           </span>
+                        </button>
+                        <div className="flex items-center gap-1">
+                          {s.status === 'generating' ? (
+                            <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                          ) : s.status === 'completed' ? (
+                            <button onClick={() => generateSinglePprSection(idx)} className="p-1.5 text-green-500 hover:bg-green-100 rounded-lg transition-all" title="Перегенерировать">
+                              <RefreshCw className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button onClick={() => generateSinglePprSection(idx)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-all" title="Начать генерацию">
+                              <PlayCircle className="w-5 h-5" />
+                            </button>
+                          )}
+                        </div>
+                     </div>
                    ))}
                 </div>
 
                 <div className="space-y-3 pt-4 border-t border-slate-100">
-                   <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Технологические карты (в составе ППР)</h2>
+                   <h3 className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Технологические карты:</h3>
                    {project.workType.map((work) => (
                      <div key={work} className="space-y-1">
                         <button onClick={() => toggleTkExpand(work)} className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-100 transition-all group">
@@ -899,13 +874,26 @@ export default function App() {
                            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${expandedTks.has(work) ? 'rotate-180' : ''}`} />
                         </button>
                         {expandedTks.has(work) && (
-                          <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                          <div className="pl-4 space-y-1 mt-1 animate-in slide-in-from-top-2 duration-200">
                              {project.tkMap[work]?.map((tkSec, idx) => (
-                               <button key={tkSec.id} onClick={() => document.getElementById(`${work}-${tkSec.id}`)?.scrollIntoView({ behavior: 'smooth' })} className="w-full text-left p-2 rounded-lg border border-transparent hover:border-slate-100 hover:bg-white flex items-center justify-between text-[9px] font-bold group">
-                                  <span className="truncate group-hover:text-blue-600 italic">Раздел {idx + 1}: {tkSec.title}</span>
-                                  {tkSec.status === 'completed' && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
-                                  {tkSec.status === 'generating' && <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />}
-                               </button>
+                               <div key={tkSec.id} className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-50 hover:border-slate-200 transition-all">
+                                 <button onClick={() => document.getElementById(`${work}-${tkSec.id}`)?.scrollIntoView({ behavior: 'smooth' })} className="flex-1 text-left overflow-hidden">
+                                   <span className={`text-[10px] font-bold block truncate ${tkSec.status === 'completed' ? 'text-green-600' : 'text-slate-600'}`}>{idx + 1}. {tkSec.title}</span>
+                                 </button>
+                                 <div className="flex items-center gap-1">
+                                   {tkSec.status === 'generating' ? (
+                                      <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                                   ) : tkSec.status === 'completed' ? (
+                                      <button onClick={() => generateSingleTkSection(work, idx)} className="p-1 text-green-400 hover:bg-green-50 rounded-md transition-all">
+                                        <RefreshCw className="w-3 h-3" />
+                                      </button>
+                                   ) : (
+                                      <button onClick={() => generateSingleTkSection(work, idx)} className="p-1 text-blue-500 hover:bg-blue-50 rounded-md transition-all">
+                                        <PlayCircle className="w-4 h-4" />
+                                      </button>
+                                   )}
+                                 </div>
+                               </div>
                              ))}
                           </div>
                         )}
@@ -917,18 +905,19 @@ export default function App() {
                   <button onClick={saveProjectVersion} disabled={isSaving} className="w-full bg-slate-900 text-white py-4 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 shadow-xl hover:bg-slate-800 transition-all">
                     <Save className="w-4 h-4" /> Сохранить весь проект
                   </button>
+                  <button onClick={() => setCurrentStep('new-project')} className="w-full bg-white text-slate-600 py-3 rounded-2xl text-[10px] font-black uppercase border border-slate-200 hover:bg-slate-50 transition-all">
+                    Вернуться к данным
+                  </button>
                 </div>
              </div>
            )}
 
            {currentStep === 'ppr-register' && (
              <div className="space-y-4 animate-in slide-in-from-left duration-300">
-                <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">
-                  Реестр документов
-                </h2>
+                <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Реестр ППР</h2>
                 <div className="relative mb-4">
                   <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
-                  <input type="text" placeholder="Поиск по архиву..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-10 pr-4 py-2 text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+                  <input type="text" placeholder="Поиск по проектам..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-10 pr-4 py-2 text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
              </div>
            )}
@@ -960,13 +949,11 @@ export default function App() {
                 <div className="flex items-center justify-between mb-8">
                   <div>
                     <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight leading-none">Реестр ППР</h2>
-                    <p className="text-slate-400 font-medium mt-2">Комплексные проекты производства работ</p>
+                    <p className="text-slate-400 font-medium mt-2">Архив сформированной документации</p>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <button onClick={() => setCurrentStep('new-project')} className="bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center gap-2">
-                      <Plus className="w-4 h-4" /> Создать новый
-                    </button>
-                  </div>
+                  <button onClick={() => setCurrentStep('new-project')} className="bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Новый проект
+                  </button>
                 </div>
 
                 <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden">
@@ -974,76 +961,37 @@ export default function App() {
                     <thead className="bg-slate-50 border-b border-slate-100">
                       <tr>
                         <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Название проекта</th>
-                        <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Кол-во ТК</th>
                         <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Версия</th>
-                        <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 w-24">Принтер</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 w-24 text-right pr-12">Действия</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {filteredProjects.length > 0 ? filteredProjects.map((p) => (
+                      {filteredProjects.map((p) => (
                         <tr key={`${p.id}-${p.version}`} className="hover:bg-blue-50/50 transition-colors group cursor-pointer" onClick={() => loadProject(p)}>
                           <td className="px-6 py-5">
                             <div className="text-sm font-black text-slate-800 group-hover:text-blue-600 uppercase leading-tight">{p.data.projectName}</div>
                           </td>
-                          <td className="px-6 py-5"><div className="text-sm font-bold text-slate-600">{p.data.workType.length} шт.</div></td>
                           <td className="px-6 py-5"><span className="bg-slate-100 text-slate-500 px-3 py-1 rounded-full text-[10px] font-black">v.{p.version}</span></td>
-                          <td className="px-6 py-5">
+                          <td className="px-6 py-5 text-right pr-6">
                             <button onClick={(e) => { e.stopPropagation(); loadProject(p); setTimeout(triggerSystemPrint, 500); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-white rounded-xl shadow-sm border border-transparent hover:border-blue-100 transition-all">
                               <Printer className="w-5 h-5" />
                             </button>
                           </td>
                         </tr>
-                      )) : (
-                        <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-300 font-black uppercase text-xs">Проекты не найдены</td></tr>
-                      )}
+                      ))}
                     </tbody>
                   </table>
                 </div>
              </div>
            ) : currentStep === 'dictionaries' ? (
              <div className="p-8 max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500">
-                {dictTab === 'library' ? (
-                  <div className="space-y-8">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight">Нормативы (RAG)</h2>
-                        <p className="text-slate-400 font-medium mt-1">Файлы ГЭСН, ФЕР и СП для интеллектуальной генерации</p>
-                      </div>
-                      <button onClick={() => libraryInputRef.current?.click()} className="bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all">
-                        <Upload className="w-4 h-4" /> Добавить нормативы
-                        <input type="file" ref={libraryInputRef} className="hidden" multiple accept=".pdf,.doc,.docx,.xls,.xlsx" onChange={handleLibraryUpload} />
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {dictionaries.referenceLibrary.map((ref) => (
-                        <div key={ref.id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl transition-all group relative">
-                          <button onClick={() => setDictionaries(d => ({...d, referenceLibrary: d.referenceLibrary.filter(f => f.id !== ref.id)}))} className="absolute top-4 right-4 p-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 ${
-                            ref.category === 'ГЭСН' ? 'bg-orange-100 text-orange-600' :
-                            ref.category === 'ФЕР' ? 'bg-blue-100 text-blue-600' :
-                            ref.category === 'СП' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            <BookOpen className="w-6 h-6" />
-                          </div>
-                          <div className="text-[10px] font-black uppercase text-slate-400 mb-1">{ref.category}</div>
-                          <h3 className="text-sm font-black text-slate-800 leading-tight mb-2 truncate" title={ref.name}>{ref.name}</h3>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 p-8 text-center">
-                     <Database className="w-16 h-16 text-slate-100 mx-auto mb-4" />
-                     <h3 className="text-xl font-black text-slate-800 uppercase">Раздел находится в разработке</h3>
-                  </div>
-                )}
+                <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 p-8 text-center">
+                   <Database className="w-16 h-16 text-slate-100 mx-auto mb-4" />
+                   <h3 className="text-xl font-black text-slate-800 uppercase">Раздел находится в разработке</h3>
+                </div>
              </div>
            ) : (
              <div className="document-preview-container flex flex-col items-center">
-                {/* 1. Title Page */}
                 <div className="page-container">
                     <div className="gost-frame"></div>
                     <div className="gost-content title-page-content font-gost p-8 text-center space-y-12">
@@ -1054,24 +1002,67 @@ export default function App() {
                     </div>
                 </div>
 
-                {/* 2. PPR Main Sections */}
                 {pprSections.map((s, idx) => (
                   <div key={s.id} id={s.id} className="page-container">
                       <div className="gost-frame"></div>
                       <div className="gost-content p-10">
                         <h3 className="text-[14pt] font-black border-b-2 border-black mb-8 pb-2 uppercase">{idx + 1}. {s.title}</h3>
-                        <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost">
-                            {s.content ? cleanMarkdown(s.content) : 'Раздел еще не сгенерирован...'}
-                        </div>
+                        
+                        {s.id === 'ppr-8' && getGanttData ? (
+                          <div className="space-y-8 h-full flex flex-col">
+                             <div className="flex-1 overflow-x-auto border border-black p-2 mt-4 font-sans text-[8pt]">
+                                <h4 className="text-center font-bold mb-4 text-[10pt] uppercase">Календарный график производства работ</h4>
+                                <table className="w-full border-collapse border border-black text-center">
+                                  <thead>
+                                    <tr>
+                                      <th rowSpan={2} className="border border-black p-1 w-[80mm]">Наименование работ</th>
+                                      <th colSpan={getGanttData.totalDays} className="border border-black p-1 text-[7pt]">Календарные дни производства работ</th>
+                                    </tr>
+                                    <tr>
+                                      {Array.from({length: getGanttData.totalDays}).map((_, i) => (
+                                        <th key={i} className="border border-black w-[4mm] text-[6pt] h-6">{i + 1}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {getGanttData.tasks.map((task, tidx) => {
+                                      const startOffset = Math.ceil((task.start!.getTime() - getGanttData.rangeStart.getTime()) / (1000 * 60 * 60 * 24));
+                                      const duration = Math.ceil((task.end!.getTime() - task.start!.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                                      
+                                      return (
+                                        <tr key={tidx}>
+                                          <td className="border border-black text-left p-1 text-[7pt] leading-tight font-bold">{task.name}</td>
+                                          {Array.from({length: getGanttData.totalDays}).map((_, dayIdx) => {
+                                            const isActive = dayIdx >= startOffset && dayIdx < startOffset + duration;
+                                            return (
+                                              <td key={dayIdx} className={`border border-black w-[4mm] h-6 ${isActive ? 'bg-slate-800' : ''}`}></td>
+                                            );
+                                          })}
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                                <p className="mt-4 text-[7pt] italic">Начало работ: {getGanttData.rangeStart.toLocaleDateString()} | Окончание работ: {getGanttData.rangeEnd.toLocaleDateString()}</p>
+                             </div>
+                          </div>
+                        ) : (
+                          <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost">
+                              {s.content ? cleanMarkdown(s.content) : (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-300 gap-4 opacity-50">
+                                   <Zap className="w-12 h-12" />
+                                   <p className="font-bold uppercase text-sm">Раздел ожидает генерации в панели управления</p>
+                                </div>
+                              )}
+                          </div>
+                        )}
                       </div>
                       <MainStamp pageNum={++globalPageNum} />
                   </div>
                 ))}
 
-                {/* 3. Integrated Technological Cards (TK) */}
                 {project.workType.map((work, workIdx) => (
                   <React.Fragment key={work}>
-                    {/* TK Divider/Separator Title Page within PPR */}
                     <div className="page-container" id={`${work}-start`}>
                       <div className="gost-frame"></div>
                       <div className="gost-content flex flex-col items-center justify-center text-center p-20 space-y-10">
@@ -1085,7 +1076,6 @@ export default function App() {
                       <MainStamp pageNum={++globalPageNum} />
                     </div>
 
-                    {/* TK Sections */}
                     {project.tkMap[work]?.map((tkSec, secIdx) => (
                       <div key={tkSec.id} id={`${work}-${tkSec.id}`} className="page-container">
                         <div className="gost-frame"></div>
@@ -1096,7 +1086,12 @@ export default function App() {
                            </div>
                            <h3 className="text-[14pt] font-black mb-6">{tkSec.title}</h3>
                            <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost">
-                              {tkSec.content ? cleanMarkdown(tkSec.content) : 'Раздел ТК не сгенерирован...'}
+                              {tkSec.content ? cleanMarkdown(tkSec.content) : (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-300 gap-4 opacity-50">
+                                   <Zap className="w-8 h-8" />
+                                   <p className="font-bold uppercase text-xs text-center">Раздел Технологической карты<br/>ожидает генерации</p>
+                                </div>
+                              )}
                            </div>
                         </div>
                         <MainStamp pageNum={++globalPageNum} />
@@ -1111,10 +1106,15 @@ export default function App() {
 
       <footer className="no-print bg-slate-900 px-8 py-3 flex items-center justify-between text-[10px] font-black uppercase text-slate-500 border-t border-slate-800">
          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${isGeneratingAll ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></div> {isGeneratingAll ? 'AI Generating Document...' : 'AI Engine Ready'}</div>
-            <div className="text-blue-500 flex items-center gap-2"><BookMarked className="w-3 h-3" /> Grounding: {dictionaries.referenceLibrary.length > 0 ? 'Active (RAG)' : 'Local Only'}</div>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isGeneratingAll ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></div> 
+              {isGeneratingAll ? 'Комплексная AI генерация...' : 'AI Центр готов к работе'}
+            </div>
+            <div className="text-blue-500 flex items-center gap-2">
+              <BookMarked className="w-3 h-3" /> Grounding: {dictionaries.referenceLibrary.length > 0 ? 'Active' : 'Off'}
+            </div>
          </div>
-         <span className="tracking-widest opacity-50">StroyDoc AI — Комплексный генератор ППР и ТК — v2.6</span>
+         <span className="tracking-widest opacity-50">StroyDoc AI — Инженерный терминал — v2.8</span>
       </footer>
     </div>
   );
@@ -1211,13 +1211,12 @@ function WorkTreeSelect({ label, selectedItems, onChange, catalog, hasError }: {
       {isOpen && (
         <div className="absolute z-[250] left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl max-h-[550px] flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-2">
           <div className="p-4 bg-slate-50 border-b border-slate-100">
-            <input type="text" placeholder="Поиск по названию работы..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500" />
+            <input type="text" placeholder="Поиск работ..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           
           <div className="overflow-y-auto flex-1 p-2 space-y-1 custom-scrollbar bg-white">
             {Object.entries(catalog).map(([catName, types]) => {
               const isCatExpanded = expandedCats.has(catName);
-              
               return (
                 <div key={catName} className="space-y-1">
                   <button onClick={() => toggleCategory(catName)} className={`w-full flex items-center gap-2 p-2.5 rounded-xl hover:bg-slate-50 text-left transition-colors ${isCatExpanded ? 'bg-slate-50' : ''}`}>
@@ -1230,14 +1229,12 @@ function WorkTreeSelect({ label, selectedItems, onChange, catalog, hasError }: {
                       {Object.entries(types).map(([typeName, jobs]) => {
                         const typeId = `${catName}-${typeName}`;
                         const isTypeExpanded = expandedTypes.has(typeId);
-                        
                         return (
                           <div key={typeName} className="space-y-1">
                             <button onClick={() => toggleType(typeId)} className={`w-full flex items-center gap-2 p-2 rounded-lg hover:bg-blue-50/30 text-left transition-colors ${isTypeExpanded ? 'bg-blue-50/20' : ''}`}>
                               <ChevronRight className={`w-3.5 h-3.5 text-blue-400 transition-transform ${isTypeExpanded ? 'rotate-90' : ''}`} />
                               <span className="text-[10px] font-bold text-slate-600 uppercase">{typeName}</span>
                             </button>
-
                             {isTypeExpanded && (
                               <div className="pl-6 space-y-0.5 border-l-2 border-slate-100 ml-1.5">
                                 {jobs.filter(j => j.toLowerCase().includes(search.toLowerCase())).map((job) => (
