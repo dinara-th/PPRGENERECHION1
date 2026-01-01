@@ -16,12 +16,13 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
         {
           parts: [
             { inlineData: { data: fileData, mimeType } },
-            { text: "Найди в этом документе наименование рабочей документации, её шифр и перечень видов строительных работ. Верни ответ строго в формате JSON: {\"name\": \"...\", \"code\": \"...\", \"workTypes\": [\"Вид 1\", \"Вид 2\"]}." }
+            { text: "Проанализируй этот строительный документ (чертеж или пояснительную записку). Найди полное наименование документации, её шифр (марку) и перечень основных видов работ. Верни ответ строго в формате JSON: {\"name\": \"...\", \"code\": \"...\", \"workTypes\": [\"...\", \"...\"]}." }
           ]
         }
       ],
       config: {
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 2000 },
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -75,12 +76,13 @@ export async function extractWorksFromEstimate(
         {
           parts: [
             { inlineData: { data: fileData, mimeType } },
-            { text: `Проанализируй сметную ведомость. Выбери из списка справочника подходящие работы.\n\nСПИСОК ИЗ СПРАВОЧНИКА:\n${allAvailableWorks.join('\n')}\n\nВерни JSON: {"selectedWorks": ["..."]}.` }
+            { text: `Ты инженер-сметчик. Проанализируй сметную ведомость. Сопоставь позиции сметы с нашим каталогом видов работ. Выбери только те названия из каталога, которые реально присутствуют в смете.\n\nКАТАЛОГ:\n${allAvailableWorks.join('\n')}\n\nВерни результат в формате JSON: {"selectedWorks": ["..."]}.` }
           ]
         }
       ],
       config: {
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 4000 },
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -101,6 +103,7 @@ export async function extractWorksFromEstimate(
     }
   } catch (e) {
     console.error("Estimate extraction error:", e);
+    throw e;
   }
   return [];
 }
@@ -126,32 +129,30 @@ export async function generateSectionContent(
       
       ДАННЫЕ ПРОЕКТА:
       ПРОЕКТ: ${project.projectName} | ОБЪЕКТ: ${project.objectName}
+      АДРЕС: ${project.location}
       ВИДЫ РАБОТ: ${project.workType.join(', ')}
       СРОКИ: ${deadlinesText}
       
       ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ НОРМАТИВНОЙ БАЗЫ:
-      К запросу приложены файлы из "Базы знаний" (ГЭСН, ФЕР, СП). 
-      ОБЯЗАТЕЛЬНО используй данные из этих файлов (технологические последовательности, требования к материалам, нормы расхода, требования безопасности) для наполнения раздела. Если данные в файлах противоречат общим знаниям, приоритет имеют данные из загруженных файлов.
+      К запросу приложены файлы из "Базы знаний" и текущая рабочая документация. 
+      ОБЯЗАТЕЛЬНО используй данные из этих файлов для наполнения раздела. 
+      Если это раздел "Техника безопасности", опирайся на СП и ГОСТ.
+      Если это "Технология работ", детально распиши последовательность для: ${project.workType.join(', ')}.
 
-      Стиль: Технический, ГОСТ. Только Markdown.
+      Стиль: Строго технический, профессиональный инженерный язык, соответствие ГОСТ. Только Markdown (без # заголовков).
     `;
 
   const parts: any[] = [{ text: promptText }];
 
-  // Добавляем документы проекта (РД)
   if (project.workingDocs && project.workingDocs.length > 0) {
     project.workingDocs.forEach(doc => {
       parts.push({ inlineData: { mimeType: doc.mimeType, data: doc.data } });
     });
   }
 
-  // Добавляем глобальную базу знаний (RAG контекст)
   if (referenceFiles && referenceFiles.length > 0) {
     referenceFiles.forEach(ref => {
-      parts.push({ 
-        inlineData: { mimeType: ref.mimeType, data: ref.data },
-        // Мы можем добавить текстовое описание для AI, чтобы он понимал, что это за файл
-      });
+      parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
     });
   }
 
@@ -160,9 +161,9 @@ export async function generateSectionContent(
       model,
       contents: { parts },
       config: {
-        temperature: 0.2, // Меньше креатива, больше точности по документам
+        temperature: 0.1,
         topP: 0.95,
-        thinkingConfig: { thinkingBudget: 4000 } // Даем AI подумать над нормативами
+        thinkingConfig: { thinkingBudget: 8000 }
       },
     });
 
