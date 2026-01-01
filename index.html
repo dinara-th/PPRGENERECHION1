@@ -1,162 +1,200 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>StroyDoc AI - Генератор ППР и ТК (ГОСТ)</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
     <style>
-        body { 
-            font-family: 'Inter', sans-serif; 
-            margin: 0;
-            padding: 0;
-        }
+        body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
         
         @media screen {
             .document-preview-container {
-                background: #cbd5e1; /* Darker slate for contrast */
+                background: #cbd5e1;
                 padding: 40px 20px;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 gap: 30px;
             }
-            .page-container {
-                background: white;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
-            }
         }
 
-        /* Standard A4 Portrait Dimensions */
         .page-container {
             position: relative;
             width: 210mm;
             height: 297mm;
-            min-width: 210mm;
-            min-height: 297mm;
-            box-sizing: border-box;
             background: white;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
             overflow: hidden;
-            display: block;
+            flex-shrink: 0;
         }
 
         @media print {
-            @page {
-                size: A4 portrait;
-                margin: 0;
-            }
-            body {
-                background: white;
-            }
+            @page { size: A4 portrait; margin: 0; }
             .no-print { display: none !important; }
-            .document-preview-container {
-                padding: 0 !important;
-                background: none !important;
-                display: block !important;
-            }
-            .page-container {
-                box-shadow: none !important;
-                margin: 0 !important;
-                page-break-after: always;
-            }
+            .document-preview-container { padding: 0 !important; background: none !important; }
+            .page-container { box-shadow: none !important; margin: 0 !important; page-break-after: always; }
         }
 
-        /* GOST Frame - strict compliance */
         .gost-frame {
             position: absolute;
-            top: 5mm;
-            left: 20mm;
-            right: 5mm;
-            bottom: 5mm;
-            border: 0.7mm solid black; /* Main thick line */
+            top: 5mm; left: 20mm; right: 5mm; bottom: 5mm;
+            border: 0.7mm solid black;
             pointer-events: none;
             z-index: 100;
         }
 
         .gost-content {
             position: absolute;
-            top: 10mm;
-            left: 25mm;
-            right: 10mm;
-            bottom: 45mm; /* Adjusted from 60mm to match smaller stamp */
-            font-size: 11pt;
-            line-height: 1.5;
-            overflow: hidden;
-            color: black;
-            text-align: justify;
-        }
-        
-        .title-page-content {
-            bottom: 15mm !important;
+            top: 10mm; left: 25mm; right: 10mm; bottom: 50mm;
+            font-size: 11pt; line-height: 1.5;
+            color: black; text-align: justify;
         }
 
-        /* Stamp Styles (Form 6 - Standard for secondary pages) */
         .main-stamp {
             position: absolute;
-            bottom: 5mm;
-            right: 5mm;
-            width: 185mm;
-            height: 40mm; /* Reduced from 55mm to be more proportional */
+            bottom: 5mm; right: 5mm;
+            width: 185mm; height: 40mm;
             border-left: 0.7mm solid black;
             border-top: 0.7mm solid black;
-            z-index: 101;
             background: white;
-            box-sizing: border-box;
         }
 
-        /* Generic table for stamps */
-        .stamp-table {
-            width: 100%;
-            height: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-        }
-        .stamp-table td {
-            border: 0.2mm solid black;
-            padding: 1.5mm;
-            font-size: 7pt; /* Slightly smaller font for engineering look */
-            vertical-align: middle;
-            overflow: hidden;
-            line-height: 1.1;
-        }
-        
+        .stamp-table { width: 100%; height: 100%; border-collapse: collapse; }
+        .stamp-table td { border: 0.2mm solid black; padding: 1mm; font-size: 7pt; vertical-align: middle; }
         .font-gost { font-family: 'PT Serif', serif; }
-        
-        /* Hide scrollbar but allow scrolling */
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-
-        /* Professional Visible Scrollbar */
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #f8fafc;
-            border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
-        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.562.0"
-  }
-}
-</script>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@19.0.0",
+        "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.460.0"
+      }
+    }
+    </script>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { FileText, Printer, Sparkles } from 'lucide-react';
+
+        const App = () => {
+            const [docData, setDocData] = useState({
+                title: "ПРОЕКТ ПРОИЗВОДСТВА РАБОТ",
+                objectName: "Жилой комплекс 'Северное Сияние'",
+                company: "ООО 'ТехСтройКонсалт'",
+                contractor: "Иванов И.И.",
+                docNumber: "ППР-2026/01",
+                sections: [
+                    { id: 1, title: "1. ОБЩИЕ ПОЛОЖЕНИЯ", content: "Настоящий проект производства работ разработан на устройство монолитных конструкций ниже отметки 0.000..." },
+                    { id: 2, title: "2. ОРГАНИЗАЦИЯ РАБОТ", content: "До начала производства основных работ должны быть выполнены мероприятия по подготовке строительной площадки..." }
+                ]
+            });
+
+            return (
+                <div className="flex h-screen bg-slate-100 overflow-hidden no-print">
+                    <aside className="w-80 bg-white border-r border-slate-200 flex flex-col shadow-xl z-10">
+                        <div className="p-6 border-b bg-slate-900 text-white">
+                            <div className="flex items-center gap-2 mb-1">
+                                <FileText size={20} className="text-blue-400" />
+                                <h1 className="font-bold text-lg">StroyDoc AI</h1>
+                            </div>
+                            <p className="text-xs text-slate-400">Генератор документации ГОСТ</p>
+                        </div>
+
+                        <div className="flex-1 p-6 space-y-4 overflow-y-auto custom-scrollbar">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Объект</label>
+                                <input 
+                                    className="w-full mt-1 p-2 border rounded text-sm" 
+                                    value={docData.objectName}
+                                    onChange={(e) => setDocData({...docData, objectName: e.target.value})}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Шифр</label>
+                                <input 
+                                    className="w-full mt-1 p-2 border rounded text-sm" 
+                                    value={docData.docNumber}
+                                    onChange={(e) => setDocData({...docData, docNumber: e.target.value})}
+                                />
+                            </div>
+                            <button className="w-full bg-blue-600 text-white py-2 rounded-md flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors">
+                                <Sparkles size={16} /> Генерировать AI
+                            </button>
+                        </div>
+
+                        <div className="p-4 border-t">
+                            <button onClick={() => window.print()} className="w-full bg-slate-800 text-white py-2 rounded flex items-center justify-center gap-2">
+                                <Printer size={18} /> Печать PDF
+                            </button>
+                        </div>
+                    </aside>
+
+                    <main className="flex-1 overflow-y-auto document-preview-container custom-scrollbar">
+                        {/* Страница 1 */}
+                        <div className="page-container">
+                            <div className="gost-frame"></div>
+                            <div className="gost-content flex flex-col items-center justify-between py-10">
+                                <div className="font-bold">{docData.company}</div>
+                                <div className="text-center">
+                                    <h2 className="text-xl font-bold underline mb-4">{docData.title}</h2>
+                                    <p className="text-lg">{docData.objectName}</p>
+                                    <p className="mt-4 font-mono">{docData.docNumber}</p>
+                                </div>
+                                <div>Москва, 2026</div>
+                            </div>
+                        </div>
+
+                        {/* Страница 2 */}
+                        <div className="page-container">
+                            <div className="gost-frame"></div>
+                            <div className="gost-content font-gost">
+                                {docData.sections.map(s => (
+                                    <div key={s.id} className="mb-6">
+                                        <h3 className="font-bold text-center mb-2">{s.title}</h3>
+                                        <p>{s.content}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="main-stamp">
+                                <table className="stamp-table">
+                                    <tbody>
+                                        <tr>
+                                            <td colSpan="4">Изм. Лист № док. Подп. Дата</td>
+                                            <td colSpan="3" className="text-center font-bold">{docData.docNumber}</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Разраб.</td><td>{docData.contractor}</td><td></td><td></td>
+                                            <td rowSpan="2" className="text-center font-bold text-[8pt]">{docData.objectName}</td>
+                                            <td>Стадия</td><td>Лист</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Пров.</td><td>Петров П.П.</td><td></td><td></td>
+                                            <td className="text-center">П</td><td className="text-center">2</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
