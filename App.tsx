@@ -53,7 +53,8 @@ import {
   Scissors,
   BarChart3,
   PlayCircle,
-  RefreshCw
+  RefreshCw,
+  Sparkle
 } from 'lucide-react';
 import { ProjectData, DocumentType, DocSection, WorkingDoc, SavedProject, ConstructionObject, ClientEntry, ContractorEntry, ReferenceFile } from './types';
 import { generateSectionContent, extractDocInfo, extractWorksFromEstimate } from './geminiService';
@@ -102,7 +103,7 @@ const INITIAL_WORK_CATALOG: WorkCatalogNode = {
       "Погружение стальных свай-оболочек",
       "Устройство лидерных скважин при забивке свай",
       "Срубка голов железобетонных свай вручную",
-      "Срубка голов свай гидравлическим оборудованием"
+      "Срубка голов свай гидраврическим оборудованием"
     ],
     "Буронабивные и буроинъекционные сваи": [
       "Бурение скважин под защитой бентонитового раствора",
@@ -477,6 +478,8 @@ export default function App() {
             aiWorksFromEstimate: Array.from(new Set([...prev.aiWorksFromEstimate, ...selectedWorks]))
         }));
         showNotification(`AI нашел ${selectedWorks.length} видов работ.`, 'success');
+      } else {
+        showNotification("Не удалось автоматически определить виды работ. Выберите их вручную.", "info");
       }
     } catch (error) {
       showNotification("Ошибка анализа сметы", 'error');
@@ -785,6 +788,55 @@ export default function App() {
                     <Upload className="w-8 h-8 text-slate-300 mx-auto mb-2 group-hover:text-blue-500 transition-colors" />
                     <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Загрузить документы РД</p>
                   </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Анализ сметы</h2>
+                    {isExtracting && <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />}
+                  </div>
+                  <div onClick={() => estimateInputRef.current?.click()} className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-all group shadow-sm">
+                    <input type="file" ref={estimateInputRef} className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.xml" onChange={handleEstimateUpload} />
+                    <Calculator className="w-8 h-8 text-slate-300 mx-auto mb-2 group-hover:text-blue-500 transition-colors" />
+                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Импорт сметы / ведомости</p>
+                  </div>
+                  
+                  {project.aiWorksFromEstimate.length > 0 && (
+                    <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 animate-in fade-in slide-in-from-top-2">
+                       <h3 className="text-[10px] font-black text-blue-700 uppercase tracking-widest flex items-center gap-2 mb-3">
+                         <Sparkles className="w-3.5 h-3.5" /> Найденные виды работ:
+                       </h3>
+                       <div className="space-y-2">
+                          {project.aiWorksFromEstimate.map((work, idx) => {
+                            const isSelected = project.workType.includes(work);
+                            return (
+                              <div key={idx} className="flex items-center justify-between gap-2 bg-white/80 p-2 rounded-xl text-[10px] font-bold text-slate-600 border border-blue-50">
+                                <span className="truncate">{work}</span>
+                                {!isSelected ? (
+                                  <button 
+                                    onClick={() => updateProject('workType', [...project.workType, work])}
+                                    className="p-1 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-all"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </button>
+                                ) : (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                                )}
+                              </div>
+                            );
+                          })}
+                          <button 
+                            onClick={() => {
+                              const uniqueWorks = Array.from(new Set([...project.workType, ...project.aiWorksFromEstimate]));
+                              updateProject('workType', uniqueWorks);
+                            }}
+                            className="w-full mt-2 py-2 text-[9px] font-black uppercase text-blue-600 border border-blue-200 rounded-xl hover:bg-blue-600 hover:text-white transition-all"
+                          >
+                            Добавить всё из сметы
+                          </button>
+                       </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-4">
@@ -1114,7 +1166,7 @@ export default function App() {
               <BookMarked className="w-3 h-3" /> Grounding: {dictionaries.referenceLibrary.length > 0 ? 'Active' : 'Off'}
             </div>
          </div>
-         <span className="tracking-widest opacity-50">StroyDoc AI — Инженерный терминал — v2.8</span>
+         <span className="tracking-widest opacity-50">StroyDoc AI — Инженерный терминал — v2.9</span>
       </footer>
     </div>
   );
