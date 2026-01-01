@@ -49,7 +49,8 @@ import {
   ClipboardList,
   Paperclip,
   BookMarked,
-  Library
+  Library,
+  Scissors
 } from 'lucide-react';
 import { ProjectData, DocumentType, DocSection, WorkingDoc, SavedProject, ConstructionObject, ClientEntry, ContractorEntry, ReferenceFile } from './types';
 import { generateSectionContent, extractDocInfo, extractWorksFromEstimate } from './geminiService';
@@ -294,10 +295,10 @@ export default function App() {
   const [dictionaries, setDictionaries] = useState<HierarchicalDict>(INITIAL_HIERARCHICAL_DICT);
   const [isDictDropdownOpen, setIsDictDropdownOpen] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
+  const [expandedTks, setExpandedTks] = useState<Set<string>>(new Set());
   
   const [isWorkDetailsExpanded, setIsWorkDetailsExpanded] = useState(true);
 
-  // Define filteredProjects to fix build errors
   const filteredProjects = useMemo(() => {
     return savedProjects.filter(p => 
       p.data.projectName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -549,15 +550,49 @@ export default function App() {
     }
   };
 
-  const generateAllSections = async (sections: DocSection[]) => {
+  const generateAllInOne = async () => {
     setIsGeneratingAll(true);
     const activeRefs = dictionaries.referenceLibrary;
-    for (let i = 0; i < sections.length; i++) {
+    
+    // 1. Generate PPR Sections
+    for (let i = 0; i < pprSections.length; i++) {
       setPprSections(prev => { const n = [...prev]; n[i].status = 'generating'; return n; });
-      const content = await generateSectionContent(project, sections[i].title, `Генерация раздела ${sections[i].title}`, activeRefs);
+      const content = await generateSectionContent(project, pprSections[i].title, `Генерация основного раздела ППР: ${pprSections[i].title}`, activeRefs);
       setPprSections(prev => { const n = [...prev]; n[i].content = content; n[i].status = 'completed'; return n; });
     }
+
+    // 2. Generate TK Sections for each selected work
+    for (const work of project.workType) {
+      const sections = project.tkMap[work] || [];
+      for (let j = 0; j < sections.length; j++) {
+        setProject(prev => {
+          const nextTkMap = { ...prev.tkMap };
+          const nextSections = [...nextTkMap[work]];
+          nextSections[j].status = 'generating';
+          nextTkMap[work] = nextSections;
+          return { ...prev, tkMap: nextTkMap };
+        });
+
+        const content = await generateSectionContent(
+          project, 
+          sections[j].title, 
+          `Генерация раздела "${sections[j].title}" Технологической Карты на вид работ: ${work}`, 
+          activeRefs
+        );
+
+        setProject(prev => {
+          const nextTkMap = { ...prev.tkMap };
+          const nextSections = [...nextTkMap[work]];
+          nextSections[j].content = content;
+          nextSections[j].status = 'completed';
+          nextTkMap[work] = nextSections;
+          return { ...prev, tkMap: nextTkMap };
+        });
+      }
+    }
+
     setIsGeneratingAll(false);
+    showNotification("Документ ППР со всеми вложенными ТК успешно сформирован", "success");
   };
 
   const saveProjectVersion = () => {
@@ -593,7 +628,16 @@ export default function App() {
     setTimeout(() => window.print(), 300);
   }, [project.projectName]);
 
-  const MainStamp = ({ pageNum }: { pageNum: number }) => (
+  const toggleTkExpand = (work: string) => {
+    setExpandedTks(prev => {
+      const next = new Set(prev);
+      if (next.has(work)) next.delete(work);
+      else next.add(work);
+      return next;
+    });
+  };
+
+  const MainStamp = ({ pageNum, docCode }: { pageNum: number, docCode?: string }) => (
     <div className="main-stamp font-sans">
       <table className="stamp-table">
         <tbody>
@@ -608,7 +652,7 @@ export default function App() {
                   <div>Подп.</div>
                 </div>
                 <div className="flex-1 flex items-center justify-center font-bold text-[8pt]">
-                  {project.workingDocCode || 'ШИФР-ДОКУМЕНТА'}
+                  {docCode || project.workingDocCode || 'ШИФР-ДОКУМЕНТА'}
                 </div>
               </div>
             </td>
@@ -647,13 +691,16 @@ export default function App() {
              </td>
              <td className="text-center align-middle">
                 <div className="text-[7pt]">Листов</div>
-                <div className="font-bold text-[9pt]">12</div>
+                <div className="font-bold text-[9pt]">--</div>
              </td>
           </tr>
         </tbody>
       </table>
     </div>
   );
+
+  // Global counter for pages
+  let globalPageNum = 1;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -686,17 +733,17 @@ export default function App() {
              {isDictDropdownOpen && (
                <div className="absolute top-full right-0 mt-2 w-64 bg-white border border-slate-100 rounded-2xl shadow-2xl py-2 z-[300] animate-in fade-in slide-in-from-top-2">
                  <button onClick={() => { setCurrentStep('dictionaries'); setDictTab('objects'); setIsDictDropdownOpen(false); }} className="w-full text-left px-4 py-2.5 text-[11px] font-black uppercase text-slate-600 hover:bg-slate-50 flex items-center gap-3">
-                   <Database className="w-3.5 h-3.5" /> База объектов
+                   <Database className="w-3.5 h-3.5" /> Объекты
                  </button>
                  <button onClick={() => { setCurrentStep('dictionaries'); setDictTab('clients'); setIsDictDropdownOpen(false); }} className="w-full text-left px-4 py-2.5 text-[11px] font-black uppercase text-slate-600 hover:bg-slate-50 flex items-center gap-3">
-                   <Briefcase className="w-3.5 h-3.5" /> База заказчиков
+                   <Briefcase className="w-3.5 h-3.5" /> Заказчики
                  </button>
                  <button onClick={() => { setCurrentStep('dictionaries'); setDictTab('contractors'); setIsDictDropdownOpen(false); }} className="w-full text-left px-4 py-2.5 text-[11px] font-black uppercase text-slate-600 hover:bg-slate-50 flex items-center gap-3">
-                   <Building2 className="w-3.5 h-3.5" /> База подрядчиков
+                   <Building2 className="w-3.5 h-3.5" /> Подрядчики
                  </button>
                  <div className="h-px bg-slate-100 mx-2 my-1" />
                  <button onClick={() => { setCurrentStep('dictionaries'); setDictTab('library'); setIsDictDropdownOpen(false); }} className="w-full text-left px-4 py-2.5 text-[11px] font-black uppercase text-blue-600 hover:bg-blue-50 flex items-center gap-3">
-                   <Library className="w-3.5 h-3.5" /> Нормативная база (RAG)
+                   <Library className="w-3.5 h-3.5" /> Нормативы (RAG)
                  </button>
                  <button onClick={() => { setCurrentStep('dictionaries'); setDictTab('works'); setIsDictDropdownOpen(false); }} className="w-full text-left px-4 py-2.5 text-[11px] font-black uppercase text-slate-600 hover:bg-slate-50 flex items-center gap-3">
                    <Layers className="w-3.5 h-3.5" /> Каталог работ
@@ -776,7 +823,6 @@ export default function App() {
                     <input type="file" ref={estimateInputRef} className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.xml" onChange={handleEstimateUpload} />
                     <Calculator className="w-8 h-8 text-slate-300 mx-auto mb-2 group-hover:text-blue-500 transition-colors" />
                     <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Импорт ведомости работ</p>
-                    <span className="text-[9px] text-slate-400">PDF, Office, XML</span>
                   </div>
                 </div>
 
@@ -789,7 +835,7 @@ export default function App() {
                   </button>
                   {isWorkDetailsExpanded && (
                     <div className="space-y-4">
-                      <WorkTreeSelect label="Выбор из каталога" selectedItems={project.workType} onChange={(v) => updateProject('workType', v)} catalog={dictionaries.workCatalog} hasError={validationErrors.has('workType')} />
+                      <WorkTreeSelect label="Выбор из каталога (ФЕР/ФЕРм)" selectedItems={project.workType} onChange={(v) => updateProject('workType', v)} catalog={dictionaries.workCatalog} hasError={validationErrors.has('workType')} />
                       {project.workType.length > 0 && (
                         <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
                           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><Calendar className="w-3.5 h-3.5" /> График (даты)</h3>
@@ -813,7 +859,7 @@ export default function App() {
 
                 <div className="flex flex-col gap-3">
                   <button onClick={() => { if(validateProjectData()) setCurrentStep('edit'); }} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
-                    <PenLine className="w-5 h-5" /> Сформировать ППР
+                    <PenLine className="w-5 h-5" /> Сформировать ППР и ТК
                   </button>
                   <button onClick={triggerSystemPrint} className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-black uppercase hover:bg-slate-200 transition-all flex items-center justify-center gap-2">
                     <Printer className="w-4 h-4" /> Предварительный просмотр
@@ -825,22 +871,12 @@ export default function App() {
            {currentStep === 'edit' && (
              <div className="space-y-6 animate-in slide-in-from-left duration-300">
                 <div className="flex items-center justify-between">
-                   <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Разделы документа</h2>
-                   <button onClick={() => generateAllSections(pprSections)} disabled={isGeneratingAll} className="bg-blue-50 text-blue-600 p-2 rounded-lg flex items-center gap-2 text-[10px] font-black uppercase">
-                     {isGeneratingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} AI-Генерация
+                   <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Разделы ППР</h2>
+                   <button onClick={generateAllInOne} disabled={isGeneratingAll} className="bg-blue-50 text-blue-600 p-2 rounded-lg flex items-center gap-2 text-[10px] font-black uppercase">
+                     {isGeneratingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} AI-Генерация всего
                    </button>
                 </div>
                 
-                {dictionaries.referenceLibrary.length > 0 && (
-                  <div className="bg-green-50/50 p-3 rounded-xl border border-green-100 flex items-center gap-3">
-                    <Library className="w-4 h-4 text-green-600" />
-                    <div className="text-[10px] font-bold text-green-700 leading-tight">
-                      Подключена база знаний: {dictionaries.referenceLibrary.length} файл(ов) (ГЭСН/ФЕР). 
-                      AI будет учитывать эти данные при генерации.
-                    </div>
-                  </div>
-                )}
-
                 <div className="space-y-2">
                    {pprSections.map((s, idx) => (
                      <button key={s.id} onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth' })} className="w-full text-left p-3 rounded-xl border border-slate-100 hover:bg-slate-50 flex items-center justify-between text-xs font-bold transition-all group">
@@ -850,10 +886,49 @@ export default function App() {
                      </button>
                    ))}
                 </div>
-                <div className="space-y-3">
+
+                <div className="space-y-3 pt-4 border-t border-slate-100">
+                   <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Технологические карты (в составе ППР)</h2>
+                   {project.workType.map((work) => (
+                     <div key={work} className="space-y-1">
+                        <button onClick={() => toggleTkExpand(work)} className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-100 transition-all group">
+                           <div className="flex items-center gap-2 overflow-hidden">
+                              <BookOpen className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                              <span className="text-[10px] font-black uppercase text-slate-700 truncate">{work}</span>
+                           </div>
+                           <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${expandedTks.has(work) ? 'rotate-180' : ''}`} />
+                        </button>
+                        {expandedTks.has(work) && (
+                          <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                             {project.tkMap[work]?.map((tkSec, idx) => (
+                               <button key={tkSec.id} onClick={() => document.getElementById(`${work}-${tkSec.id}`)?.scrollIntoView({ behavior: 'smooth' })} className="w-full text-left p-2 rounded-lg border border-transparent hover:border-slate-100 hover:bg-white flex items-center justify-between text-[9px] font-bold group">
+                                  <span className="truncate group-hover:text-blue-600 italic">Раздел {idx + 1}: {tkSec.title}</span>
+                                  {tkSec.status === 'completed' && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
+                                  {tkSec.status === 'generating' && <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />}
+                               </button>
+                             ))}
+                          </div>
+                        )}
+                     </div>
+                   ))}
+                </div>
+
+                <div className="space-y-3 pt-6 border-t border-slate-100">
                   <button onClick={saveProjectVersion} disabled={isSaving} className="w-full bg-slate-900 text-white py-4 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 shadow-xl hover:bg-slate-800 transition-all">
-                    <Save className="w-4 h-4" /> Сохранить в реестр
+                    <Save className="w-4 h-4" /> Сохранить весь проект
                   </button>
+                </div>
+             </div>
+           )}
+
+           {currentStep === 'ppr-register' && (
+             <div className="space-y-4 animate-in slide-in-from-left duration-300">
+                <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">
+                  Реестр документов
+                </h2>
+                <div className="relative mb-4">
+                  <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                  <input type="text" placeholder="Поиск по архиву..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-10 pr-4 py-2 text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
                 </div>
              </div>
            )}
@@ -863,10 +938,10 @@ export default function App() {
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Системные данные</h2>
                 <div className="flex flex-col gap-2">
                   <button onClick={() => setDictTab('library')} className={`text-left px-4 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-3 ${dictTab === 'library' ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
-                    <BookMarked className="w-4 h-4" /> База знаний (RAG)
+                    <BookMarked className="w-4 h-4" /> Знания (RAG)
                   </button>
                   <button onClick={() => setDictTab('objects')} className={`text-left px-4 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-3 ${dictTab === 'objects' ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
-                    <Database className="w-4 h-4" /> База объектов
+                    <Database className="w-4 h-4" /> Объекты
                   </button>
                   <button onClick={() => setDictTab('clients')} className={`text-left px-4 py-3 rounded-xl text-xs font-black uppercase transition-all flex items-center gap-3 ${dictTab === 'clients' ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
                     <Briefcase className="w-4 h-4" /> Заказчики
@@ -885,19 +960,9 @@ export default function App() {
                 <div className="flex items-center justify-between mb-8">
                   <div>
                     <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight leading-none">Реестр ППР</h2>
-                    <p className="text-slate-400 font-medium mt-2">История разработанных проектов организации</p>
+                    <p className="text-slate-400 font-medium mt-2">Комплексные проекты производства работ</p>
                   </div>
                   <div className="flex items-center gap-4">
-                    <div className="relative group no-print">
-                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-                      <input 
-                        type="text" 
-                        placeholder="Поиск по проектам..." 
-                        value={searchTerm} 
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-2xl pl-10 pr-4 py-3 text-sm font-bold w-64 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none shadow-sm transition-all"
-                      />
-                    </div>
                     <button onClick={() => setCurrentStep('new-project')} className="bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center gap-2">
                       <Plus className="w-4 h-4" /> Создать новый
                     </button>
@@ -909,7 +974,7 @@ export default function App() {
                     <thead className="bg-slate-50 border-b border-slate-100">
                       <tr>
                         <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Название проекта</th>
-                        <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Объект</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Кол-во ТК</th>
                         <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Версия</th>
                         <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 w-24">Принтер</th>
                       </tr>
@@ -920,7 +985,7 @@ export default function App() {
                           <td className="px-6 py-5">
                             <div className="text-sm font-black text-slate-800 group-hover:text-blue-600 uppercase leading-tight">{p.data.projectName}</div>
                           </td>
-                          <td className="px-6 py-5"><div className="text-sm font-bold text-slate-600">{p.data.objectName}</div></td>
+                          <td className="px-6 py-5"><div className="text-sm font-bold text-slate-600">{p.data.workType.length} шт.</div></td>
                           <td className="px-6 py-5"><span className="bg-slate-100 text-slate-500 px-3 py-1 rounded-full text-[10px] font-black">v.{p.version}</span></td>
                           <td className="px-6 py-5">
                             <button onClick={(e) => { e.stopPropagation(); loadProject(p); setTimeout(triggerSystemPrint, 500); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-white rounded-xl shadow-sm border border-transparent hover:border-blue-100 transition-all">
@@ -941,7 +1006,7 @@ export default function App() {
                   <div className="space-y-8">
                     <div className="flex items-center justify-between">
                       <div>
-                        <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight">Нормативная база (RAG)</h2>
+                        <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tight">Нормативы (RAG)</h2>
                         <p className="text-slate-400 font-medium mt-1">Файлы ГЭСН, ФЕР и СП для интеллектуальной генерации</p>
                       </div>
                       <button onClick={() => libraryInputRef.current?.click()} className="bg-blue-600 text-white px-6 py-3 rounded-2xl text-xs font-black uppercase flex items-center gap-2 shadow-xl hover:bg-blue-700 transition-all">
@@ -965,34 +1030,20 @@ export default function App() {
                           </div>
                           <div className="text-[10px] font-black uppercase text-slate-400 mb-1">{ref.category}</div>
                           <h3 className="text-sm font-black text-slate-800 leading-tight mb-2 truncate" title={ref.name}>{ref.name}</h3>
-                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
-                            <span className="text-[9px] font-bold text-slate-400">Загружено: {new Date(ref.uploadedAt).toLocaleDateString()}</span>
-                            <div className="flex items-center gap-1 text-green-600">
-                              <ShieldCheck className="w-3 h-3" />
-                              <span className="text-[9px] font-black uppercase">Active Context</span>
-                            </div>
-                          </div>
                         </div>
                       ))}
-                      {dictionaries.referenceLibrary.length === 0 && (
-                        <div className="col-span-full py-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl text-center">
-                          <Library className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                          <p className="text-slate-400 font-bold uppercase text-xs tracking-widest">База знаний пуста</p>
-                          <p className="text-slate-300 text-[10px] mt-1">Загрузите сборники ГЭСН или ФЕР для работы AI</p>
-                        </div>
-                      )}
                     </div>
                   </div>
                 ) : (
                   <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 p-8 text-center">
                      <Database className="w-16 h-16 text-slate-100 mx-auto mb-4" />
                      <h3 className="text-xl font-black text-slate-800 uppercase">Раздел находится в разработке</h3>
-                     <p className="text-slate-400 mt-2 font-medium">Для управления базами объектов и контрагентов используйте JSON импорт</p>
                   </div>
                 )}
              </div>
            ) : (
              <div className="document-preview-container flex flex-col items-center">
+                {/* 1. Title Page */}
                 <div className="page-container">
                     <div className="gost-frame"></div>
                     <div className="gost-content title-page-content font-gost p-8 text-center space-y-12">
@@ -1002,17 +1053,56 @@ export default function App() {
                       <div className="mt-auto absolute bottom-[15mm] left-0 right-0 text-center font-bold text-[12pt]">2024</div>
                     </div>
                 </div>
+
+                {/* 2. PPR Main Sections */}
                 {pprSections.map((s, idx) => (
                   <div key={s.id} id={s.id} className="page-container">
                       <div className="gost-frame"></div>
                       <div className="gost-content p-10">
                         <h3 className="text-[14pt] font-black border-b-2 border-black mb-8 pb-2 uppercase">{idx + 1}. {s.title}</h3>
-                        <div className="text-[11pt] whitespace-pre-wrap leading-relaxed">
-                            {s.content ? cleanMarkdown(s.content) : 'Раздел не заполнен...'}
+                        <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost">
+                            {s.content ? cleanMarkdown(s.content) : 'Раздел еще не сгенерирован...'}
                         </div>
                       </div>
-                      <MainStamp pageNum={idx + 2} />
+                      <MainStamp pageNum={++globalPageNum} />
                   </div>
+                ))}
+
+                {/* 3. Integrated Technological Cards (TK) */}
+                {project.workType.map((work, workIdx) => (
+                  <React.Fragment key={work}>
+                    {/* TK Divider/Separator Title Page within PPR */}
+                    <div className="page-container" id={`${work}-start`}>
+                      <div className="gost-frame"></div>
+                      <div className="gost-content flex flex-col items-center justify-center text-center p-20 space-y-10">
+                         <Scissors className="w-16 h-16 text-slate-200" />
+                         <div className="text-[12pt] font-bold text-slate-400 uppercase tracking-widest">Раздел: Технологические карты</div>
+                         <h2 className="text-[22pt] font-black uppercase border-b-8 border-black pb-4">{work}</h2>
+                         <div className="text-[11pt] font-medium leading-relaxed italic">
+                           Приложение к ППР: {project.projectName}
+                         </div>
+                      </div>
+                      <MainStamp pageNum={++globalPageNum} />
+                    </div>
+
+                    {/* TK Sections */}
+                    {project.tkMap[work]?.map((tkSec, secIdx) => (
+                      <div key={tkSec.id} id={`${work}-${tkSec.id}`} className="page-container">
+                        <div className="gost-frame"></div>
+                        <div className="gost-content p-10">
+                           <div className="flex justify-between items-baseline border-b-2 border-black mb-6">
+                             <h4 className="text-[13pt] font-black uppercase">ТК: {work}</h4>
+                             <span className="text-[10pt] font-bold">Раздел {secIdx + 1}</span>
+                           </div>
+                           <h3 className="text-[14pt] font-black mb-6">{tkSec.title}</h3>
+                           <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost">
+                              {tkSec.content ? cleanMarkdown(tkSec.content) : 'Раздел ТК не сгенерирован...'}
+                           </div>
+                        </div>
+                        <MainStamp pageNum={++globalPageNum} />
+                      </div>
+                    ))}
+                  </React.Fragment>
                 ))}
              </div>
            )}
@@ -1021,10 +1111,10 @@ export default function App() {
 
       <footer className="no-print bg-slate-900 px-8 py-3 flex items-center justify-between text-[10px] font-black uppercase text-slate-500 border-t border-slate-800">
          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div> AI Core Ready</div>
-            <div className="text-blue-500 flex items-center gap-2"><BookMarked className="w-3 h-3" /> Grounding: {dictionaries.referenceLibrary.length > 0 ? 'Enabled' : 'Local Only'}</div>
+            <div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${isGeneratingAll ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></div> {isGeneratingAll ? 'AI Generating Document...' : 'AI Engine Ready'}</div>
+            <div className="text-blue-500 flex items-center gap-2"><BookMarked className="w-3 h-3" /> Grounding: {dictionaries.referenceLibrary.length > 0 ? 'Active (RAG)' : 'Local Only'}</div>
          </div>
-         <span className="tracking-widest opacity-50">StroyDoc AI Engineering Terminal — v2.5</span>
+         <span className="tracking-widest opacity-50">StroyDoc AI — Комплексный генератор ППР и ТК — v2.6</span>
       </footer>
     </div>
   );
