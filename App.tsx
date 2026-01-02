@@ -1,5 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { 
   FileText, 
   Loader2, 
@@ -155,16 +157,7 @@ const INITIAL_PROJECT: ProjectData = {
   aiWorksFromDocs: [],
 };
 
-const cleanMarkdown = (text: string) => {
-  if (!text) return "";
-  return text
-    .replace(/#{1,6}\s?/g, '') 
-    .replace(/\*\*/g, '')      
-    .replace(/^- /gm, '— ')   
-    .trim();
-};
-
-const splitContentIntoPages = (content: string, charsPerPage: number = 2600): string[] => {
+const splitContentIntoPages = (content: string, charsPerPage: number = 2200): string[] => {
   if (!content) return [""];
   const pages: string[] = [];
   let remaining = content;
@@ -211,13 +204,13 @@ export default function App() {
     const pages: any[] = [];
     const tocEntries: { title: string; page: number; level: number }[] = [];
 
-    // Title Page
+    // Title Page (No stamp, no frame)
     pages.push({ type: 'title', pageNum: currentPage++ });
     
-    // TOC Placeholder
+    // TOC Placeholder (Uses Form 5 - Large Stamp)
     pages.push({ type: 'toc', pageNum: currentPage++ });
     
-    // PPR Sections
+    // PPR Sections (Use Form 6 - Small Stamp)
     pprSections.forEach((s, idx) => {
       const content = s.content || 'Раздел ожидает генерации...';
       const sectionPages = splitContentIntoPages(content);
@@ -227,7 +220,7 @@ export default function App() {
       });
     });
 
-    // TK Sections
+    // TK Sections (Use Form 6 - Small Stamp)
     project.workType.forEach((work, wIdx) => {
       pages.push({ type: 'tk-separator', title: work, pageNum: currentPage++ });
       tocEntries.push({ title: `Приложение ${wIdx + 1}. ТК на ${work}`, page: currentPage - 1, level: 1 });
@@ -244,6 +237,15 @@ export default function App() {
 
     return { pages, tocEntries, totalPages: currentPage - 1 };
   }, [pprSections, project.workType, project.tkMap]);
+
+  // Validation for readiness to generate
+  const isProjectReady = useMemo(() => {
+    if (project.workType.length === 0) return false;
+    // Check if all selected works have start and end dates
+    return project.workType.every(work => 
+      project.workDeadlines[work]?.start && project.workDeadlines[work]?.end
+    );
+  }, [project.workType, project.workDeadlines]);
 
   useEffect(() => {
     const data = localStorage.getItem('stroydoc_projects');
@@ -280,9 +282,30 @@ export default function App() {
           newTkMap[wt] = prev.tkMap[wt] || TK_SECTIONS_TEMPLATE.map(s => ({ ...s }));
         });
         next.tkMap = newTkMap;
+        
+        // Cleanup deadlines for removed works
+        const newDeadlines = { ...prev.workDeadlines };
+        // Remove keys not in new list
+        Object.keys(newDeadlines).forEach(k => {
+          if (!(value as string[]).includes(k)) delete newDeadlines[k];
+        });
+        next.workDeadlines = newDeadlines;
       }
       return next;
     });
+  };
+
+  const updateDeadline = (work: string, type: 'start' | 'end', date: string) => {
+    setProject(prev => ({
+      ...prev,
+      workDeadlines: {
+        ...prev.workDeadlines,
+        [work]: {
+          ...prev.workDeadlines[work],
+          [type]: date
+        }
+      }
+    }));
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -293,7 +316,6 @@ export default function App() {
     const newDocs: WorkingDoc[] = [];
     
     try {
-      // 1. Сначала читаем все файлы и добавляем их в стейт, чтобы импорт "сработал"
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const base64 = await new Promise<string>((resolve) => {
@@ -307,7 +329,6 @@ export default function App() {
       setProject(p => ({ ...p, workingDocs: [...p.workingDocs, ...newDocs] }));
       showNotification(`Загружено РД: ${files.length}. Начинаю AI-анализ...`, 'info');
 
-      // 2. Затем пробуем извлечь информацию из первого файла (фоново)
       if (newDocs.length > 0) {
         const info = await extractDocInfo(newDocs[0].data, newDocs[0].mimeType);
         if (info) {
@@ -363,51 +384,220 @@ export default function App() {
     try {
       const content = await generateSectionContent(project, pprSections[idx].title, `Раздел ППР: ${pprSections[idx].title}`, dictionaries.referenceLibrary);
       setPprSections(prev => { const n = [...prev]; n[idx].content = content; n[idx].status = 'completed'; return n; });
-    } catch (e) {
-      setPprSections(prev => { const n = [...prev]; n[idx].status = 'idle'; return n; });
-      showNotification("Ошибка генерации раздела", "error");
+    } catch (e: any) {
+      setPprSections(prev => { const n = [...prev]; n[idx].status = 'error'; return n; });
+      // Rethrow to allow batch handler to catch it
+      throw e;
     }
   };
 
-  const MainStamp = ({ pageNum }: { pageNum: number }) => (
-    <div className="main-stamp font-sans">
-      <table className="stamp-table">
-        <tbody>
-          <tr style={{ height: '12mm' }}>
-            <td colSpan={2} style={{ width: '120mm' }} className="border-r border-black">
-              <div className="flex flex-col h-full text-[6pt]">
-                <div className="border-b border-black grid grid-cols-5 text-center py-0.5">
-                  <div>Изм.</div><div>Кол.уч</div><div>Лист</div><div>№док</div><div>Подп.</div>
-                </div>
-                <div className="flex-1 flex items-center justify-center font-bold text-[8pt]">{project.workingDocCode || 'ШИФР'}</div>
-              </div>
-            </td>
-            <td colSpan={2} className="p-1 text-center align-middle">
-              <div className="text-[7pt] font-black uppercase leading-tight">{project.projectName || 'ПРОЕКТ'}</div>
-            </td>
-          </tr>
-          <tr style={{ height: '14mm' }}>
-            <td style={{ width: '40mm' }} className="border-r border-black">
-              <div className="grid grid-rows-2 h-full text-[6pt]">
-                <div className="border-b border-black px-1 flex items-center justify-between"><span>Разраб.</span><span className="font-bold">{project.roleDeveloper}</span></div>
-                <div className="px-1 flex items-center justify-between"><span>Пров.</span><span className="font-bold">{project.roleClientChiefEngineer}</span></div>
-              </div>
-            </td>
-            <td style={{ width: '80mm' }} className="border-r border-black text-center p-1 align-middle text-[7pt] italic">{project.objectName}</td>
-            <td className="w-[20mm] border-r border-black text-center"><div className="text-[6pt]">Стадия</div><div className="font-bold text-[9pt]">П</div></td>
-            <td className="w-[20mm] text-center"><div className="text-[6pt]">Лист</div><div className="font-bold text-[9pt]">{pageNum}</div></td>
-          </tr>
-          <tr style={{ height: '14mm' }}>
-             <td colSpan={3} className="border-r border-black text-center align-middle text-[8pt] font-black uppercase">{project.contractor}</td>
-             <td className="text-center align-middle"><div className="text-[7pt]">Листов</div><div className="font-bold text-[9pt]">{docLayout.totalPages}</div></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
+  const generateSingleTkSection = async (workType: string, secIdx: number) => {
+    setProject(prev => {
+      const newMap = { ...prev.tkMap };
+      if (!newMap[workType]) newMap[workType] = [];
+      newMap[workType][secIdx] = { ...newMap[workType][secIdx], status: 'generating' };
+      return { ...prev, tkMap: newMap };
+    });
+
+    const sectionTitle = project.tkMap[workType][secIdx].title;
+
+    try {
+      const content = await generateSectionContent(
+        project, 
+        `${sectionTitle} (ТК на ${workType})`, 
+        `Технологическая карта на вид работ: ${workType}. Раздел: ${sectionTitle}`, 
+        dictionaries.referenceLibrary
+      );
+      
+      setProject(prev => {
+        const newMap = { ...prev.tkMap };
+        newMap[workType][secIdx] = { ...newMap[workType][secIdx], content, status: 'completed' };
+        return { ...prev, tkMap: newMap };
+      });
+    } catch (e: any) {
+      setProject(prev => {
+        const newMap = { ...prev.tkMap };
+        newMap[workType][secIdx] = { ...newMap[workType][secIdx], status: 'error' };
+        return { ...prev, tkMap: newMap };
+      });
+      throw e;
+    }
+  };
+
+  const isAllComplete = useMemo(() => {
+    const pprComplete = pprSections.every(s => s.status === 'completed');
+    const tkComplete = project.workType.every(work => 
+       (project.tkMap[work] || []).every(s => s.status === 'completed')
+    );
+    return pprComplete && tkComplete;
+  }, [pprSections, project.workType, project.tkMap]);
+
+  const handleGenerateAll = async () => {
+    if (isGeneratingAll) return;
+    setIsGeneratingAll(true);
+    
+    // Utility to wait
+    const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+    // Helper to process a single item with quota-aware retry logic
+    const processItem = async (action: () => Promise<void>, name: string) => {
+        const maxRetries = 3;
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                await action();
+                // If successful, wait a bit to avoid hitting RPM limits immediately for the next one
+                await delay(10000); 
+                return true;
+            } catch (error: any) {
+                // Check if it's a quota error
+                const errStr = JSON.stringify(error);
+                const isQuota = 
+                    error?.status === 429 || 
+                    error?.code === 429 ||
+                    error?.status === 'RESOURCE_EXHAUSTED' ||
+                    errStr.includes('429') || 
+                    errStr.includes('quota') || 
+                    errStr.includes('RESOURCE_EXHAUSTED');
+
+                if (isQuota) {
+                    if (i < maxRetries - 1) {
+                        const waitTime = 60000; // 60s
+                        showNotification(`Лимит API (${name}). Пауза 60с...`, 'info');
+                        await delay(waitTime);
+                        continue;
+                    } else {
+                         showNotification(`Не удалось сгенерировать ${name} из-за лимитов.`, 'error');
+                    }
+                } else {
+                    // Just a regular error
+                    showNotification(`Ошибка генерации ${name}.`, 'error');
+                }
+                return false; 
+            }
+        }
+        return false;
+    };
+    
+    try {
+      // 1. Generate PPR Sections
+      for (let i = 0; i < pprSections.length; i++) {
+          if (pprSections[i].status === 'completed') continue; 
+          await processItem(() => generateSinglePprSection(i), `ППР-${i+1}`);
+      }
+
+      // 2. Generate TK Sections
+      for (const work of project.workType) {
+         const sections = project.tkMap[work] || [];
+         for (let i = 0; i < sections.length; i++) {
+           if (sections[i].status === 'completed') continue;
+           await processItem(() => generateSingleTkSection(work, i), `ТК-${work}-${i+1}`);
+         }
+      }
+
+    } catch (e) {
+      console.error("Batch generation stopped due to error:", e);
+    } finally {
+      setIsGeneratingAll(false);
+    }
+  };
+
+  const MainStamp = ({ pageNum, type = 'form6' }: { pageNum: number, type?: 'form5' | 'form6' }) => {
+    // FORM 5 (40mm) - Used on First TOC Page
+    if (type === 'form5') {
+        return (
+            <div className="main-stamp stamp-form-5 font-times">
+                <table className="stamp-table">
+                    <tbody>
+                        {/* Row 1: Approvals & Project Name */}
+                        <tr style={{ height: '15mm' }}>
+                            <td colSpan={2} style={{ width: '120mm' }} className="border-r border-black p-0">
+                                <div className="grid grid-cols-5 h-full text-center">
+                                    <div className="border-r border-black flex flex-col justify-center text-[7pt]">Изм.</div>
+                                    <div className="border-r border-black flex flex-col justify-center text-[7pt]">Кол.уч</div>
+                                    <div className="border-r border-black flex flex-col justify-center text-[7pt]">Лист</div>
+                                    <div className="border-r border-black flex flex-col justify-center text-[7pt]">№док</div>
+                                    <div className="flex flex-col justify-center text-[7pt]">Подп.</div>
+                                </div>
+                            </td>
+                            <td colSpan={2} className="text-center align-middle">
+                                <div className="text-[7pt] font-bold uppercase leading-tight">{project.workingDocCode || 'ШИФР'}</div>
+                            </td>
+                        </tr>
+                        {/* Row 2: Roles */}
+                        <tr style={{ height: '10mm' }}>
+                            <td style={{ width: '40mm' }} className="p-0 border-r border-black">
+                                <div className="grid grid-rows-2 h-full text-[7pt]">
+                                    <div className="border-b border-black px-1 flex items-center justify-between"><span>Разраб.</span><span className="font-bold">{project.roleDeveloper}</span></div>
+                                    <div className="px-1 flex items-center justify-between"><span>Пров.</span><span className="font-bold">{project.roleClientChiefEngineer}</span></div>
+                                </div>
+                            </td>
+                             <td style={{ width: '80mm' }} className="border-r border-black text-center p-1 align-middle text-[7pt] italic">
+                                {project.objectName || 'Наименование объекта строительства'}
+                            </td>
+                            <td className="w-[20mm] border-r border-black text-center p-0">
+                                <div className="h-full flex flex-col">
+                                    <div className="border-b border-black text-[6pt] h-1/2 flex items-center justify-center">Стадия</div>
+                                    <div className="font-bold text-[9pt] flex-1 flex items-center justify-center">П</div>
+                                </div>
+                            </td>
+                            <td className="w-[20mm] text-center p-0">
+                                <div className="h-full flex flex-col">
+                                    <div className="border-b border-black text-[6pt] h-1/2 flex items-center justify-center">Лист</div>
+                                    <div className="font-bold text-[9pt] flex-1 flex items-center justify-center">{pageNum}</div>
+                                </div>
+                            </td>
+                        </tr>
+                         {/* Row 3: Bottom */}
+                        <tr style={{ height: '15mm' }}>
+                            <td colSpan={2} className="border-r border-black text-center align-middle text-[7pt]">Н.контр.</td>
+                            <td colSpan={1} className="border-r border-black text-center align-middle text-[8pt] font-black uppercase">{project.contractor}</td>
+                             <td className="text-center p-0">
+                                <div className="h-full flex flex-col">
+                                    <div className="border-b border-black text-[6pt] h-1/2 flex items-center justify-center">Листов</div>
+                                    <div className="font-bold text-[9pt] flex-1 flex items-center justify-center">{docLayout.totalPages}</div>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        );
+    }
+
+    // FORM 6 (15mm) - Used on Subsequent Pages
+    return (
+        <div className="main-stamp stamp-form-6 font-times">
+            <table className="stamp-table">
+                <tbody>
+                    <tr>
+                         <td style={{ width: '120mm' }} className="border-r border-black p-0">
+                            <div className="flex h-full text-[7pt]">
+                                <div className="w-[10mm] border-r border-black flex items-center justify-center">Изм.</div>
+                                <div className="w-[10mm] border-r border-black flex items-center justify-center">Кол.уч</div>
+                                <div className="w-[10mm] border-r border-black flex items-center justify-center">Лист</div>
+                                <div className="w-[20mm] border-r border-black flex items-center justify-center">№док</div>
+                                <div className="w-[20mm] border-r border-black flex items-center justify-center">Подп.</div>
+                                <div className="w-[20mm] flex items-center justify-center">Дата</div>
+                            </div>
+                        </td>
+                        <td className="border-r border-black text-center align-middle font-bold text-[8pt]">
+                           {project.workingDocCode || 'ШИФР'}
+                        </td>
+                        <td style={{ width: '20mm' }} className="text-center align-middle p-0">
+                             <div className="flex flex-col h-full">
+                                <div className="border-b border-black text-[5pt] leading-none">Лист</div>
+                                <div className="font-bold text-[9pt] flex-1 flex items-center justify-center">{pageNum}</div>
+                             </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    );
+  };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col font-times">
       {notification && (
         <div className={`fixed top-20 right-6 z-[1000] p-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce ${notification.type === 'success' ? 'bg-green-600 text-white' : notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>
            {notification.type === 'success' ? <CheckCircle2 className="w-5" /> : <Info className="w-5" />}
@@ -419,11 +609,11 @@ export default function App() {
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentStep('new-project')}>
           <div className="bg-blue-600 p-2 rounded-lg shadow-lg"><HardHat className="text-white w-6 h-6" /></div>
           <div>
-            <h1 className="text-xl font-black text-slate-800 tracking-tight leading-none">StroyDoc AI</h1>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Engineering Portal</span>
+            <h1 className="text-xl font-black text-slate-800 tracking-tight leading-none font-sans">StroyDoc AI</h1>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none font-sans">Engineering Portal</span>
           </div>
         </div>
-        <nav className="flex items-center gap-8">
+        <nav className="flex items-center gap-8 font-sans">
            <button onClick={() => setCurrentStep('new-project')} className={`text-xs font-black uppercase flex items-center gap-2 ${currentStep === 'new-project' || currentStep === 'edit' ? 'text-blue-600' : 'text-slate-400'}`}><PlusCircle className="w-4" /> Создать</button>
            <button onClick={() => setCurrentStep('ppr-register')} className={`text-xs font-black uppercase flex items-center gap-2 ${currentStep === 'ppr-register' ? 'text-blue-600' : 'text-slate-400'}`}><ClipboardList className="w-4" /> Реестр ППР</button>
            <button onClick={() => setCurrentStep('dictionaries')} className={`text-xs font-black uppercase flex items-center gap-2 ${currentStep === 'dictionaries' ? 'text-blue-600' : 'text-slate-400'}`}><Settings className="w-4" /> Справочники</button>
@@ -432,7 +622,7 @@ export default function App() {
         </nav>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden font-sans">
         <aside className="no-print w-[400px] bg-white border-r border-slate-200 overflow-y-auto p-6 space-y-8 no-scrollbar">
            {(currentStep === 'new-project' || currentStep === 'edit') && (
              <div className="space-y-6">
@@ -463,37 +653,123 @@ export default function App() {
                     <div className="space-y-4">
                       <h2 className="text-[10px] font-black uppercase text-slate-400 tracking-widest border-l-4 border-slate-300 pl-3">Виды работ ({project.workType.length})</h2>
                       <WorkTreeSelect label="Выбрать из каталога" selectedItems={project.workType} onChange={(v: any) => updateProject('workType', v)} catalog={dictionaries.workCatalog} />
+                      
                       {project.workType.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
+                        <div className="space-y-3 mt-4">
                           {project.workType.map(w => (
-                            <span key={w} className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg text-[9px] font-bold flex items-center gap-1">
-                              {w} <X className="w-3 cursor-pointer hover:text-red-500" onClick={() => updateProject('workType', project.workType.filter(i => i !== w))} />
-                            </span>
+                            <div key={w} className="bg-slate-50 p-3 rounded-xl border border-slate-100 relative group">
+                                <div className="flex justify-between items-start mb-2">
+                                  <span className="text-xs font-bold text-slate-700 leading-tight w-[90%]">{w}</span>
+                                  <X className="w-4 h-4 text-slate-300 cursor-pointer hover:text-red-500" onClick={() => updateProject('workType', project.workType.filter(i => i !== w))} />
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-1">
+                                     <label className="text-[8px] font-black uppercase text-slate-400">Начало</label>
+                                     <input 
+                                       type="date" 
+                                       className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:border-blue-400"
+                                       value={project.workDeadlines[w]?.start || ''}
+                                       onChange={(e) => updateDeadline(w, 'start', e.target.value)}
+                                     />
+                                  </div>
+                                  <div className="space-y-1">
+                                     <label className="text-[8px] font-black uppercase text-slate-400">Окончание</label>
+                                     <input 
+                                       type="date" 
+                                       className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:border-blue-400"
+                                       value={project.workDeadlines[w]?.end || ''}
+                                       onChange={(e) => updateDeadline(w, 'end', e.target.value)}
+                                     />
+                                  </div>
+                                </div>
+                            </div>
                           ))}
                         </div>
                       )}
                     </div>
 
-                    <button onClick={() => setCurrentStep('edit')} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase shadow-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
+                    <button 
+                      onClick={() => setCurrentStep('edit')} 
+                      disabled={!isProjectReady}
+                      className={`w-full py-4 rounded-2xl font-black uppercase shadow-xl transition-all flex items-center justify-center gap-2 ${isProjectReady ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                    >
                       Перейти к генерации <ChevronRight className="w-4" />
                     </button>
+                    {!isProjectReady && project.workType.length > 0 && (
+                       <p className="text-[9px] text-center text-red-500 font-bold uppercase">Заполните сроки выполнения для всех работ</p>
+                    )}
                   </>
                 ) : (
                   <div className="space-y-6">
                     <div className="flex items-center justify-between">
                        <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Генерация разделов</h2>
-                       <button onClick={() => setIsGeneratingAll(true)} className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 hover:bg-blue-100 transition-all"><Zap className="w-4" /> Старт AI</button>
+                       <button 
+                         onClick={handleGenerateAll}
+                         disabled={isGeneratingAll}
+                         className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
+                           isAllComplete 
+                             ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                             : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                         }`}
+                       >
+                         {isGeneratingAll ? (
+                           <><Loader2 className="w-4 animate-spin" /> Генерация...</>
+                         ) : isAllComplete ? (
+                           <><CheckCircle2 className="w-4" /> Готово</>
+                         ) : (
+                           <><Zap className="w-4" /> Старт AI</>
+                         )}
+                       </button>
                     </div>
+                    
+                    {/* PPR Sections List */}
                     <div className="space-y-2">
+                       <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2">Общий ППР</h3>
                        {pprSections.map((s, idx) => (
                          <div key={s.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-white shadow-sm hover:border-blue-200 transition-all">
-                           <span className="text-xs font-bold text-slate-700 truncate pr-2">{idx + 1}. {s.title}</span>
-                           <button onClick={() => generateSinglePprSection(idx)} className="text-blue-600 p-1 hover:bg-blue-50 rounded-lg">
-                             {s.status === 'generating' ? <Loader2 className="w-4 animate-spin" /> : <PlayCircle className="w-5" />}
+                           <span className={`text-xs font-bold truncate pr-2 ${s.status === 'completed' ? 'text-green-700' : 'text-slate-700'}`}>
+                             {idx + 1}. {s.title}
+                           </span>
+                           <button onClick={() => generateSinglePprSection(idx)} className={`p-1 rounded-lg transition-colors ${
+                             s.status === 'completed' ? 'text-green-600 hover:bg-green-50' : 
+                             s.status === 'error' ? 'text-red-600 hover:bg-red-50' : 
+                             'text-blue-600 hover:bg-blue-50'
+                           }`}>
+                             {s.status === 'generating' ? <Loader2 className="w-4 animate-spin" /> : 
+                              s.status === 'completed' ? <CheckCircle2 className="w-5" /> : 
+                              s.status === 'error' ? <AlertCircle className="w-5" /> :
+                              <PlayCircle className="w-5" />}
                            </button>
                          </div>
                        ))}
                     </div>
+
+                    {/* TK Sections Lists (Per Work Type) */}
+                    {project.workType.map((work, wIdx) => (
+                      <div key={work} className="space-y-2 mt-4 pt-4 border-t border-slate-100">
+                         <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2 truncate" title={work}>
+                           ТК: {work}
+                         </h3>
+                         {(project.tkMap[work] || []).map((s, idx) => (
+                           <div key={`${work}-${idx}`} className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-white shadow-sm hover:border-blue-200 transition-all">
+                             <span className={`text-xs font-bold truncate pr-2 ${s.status === 'completed' ? 'text-green-700' : 'text-slate-700'}`}>
+                               {idx + 1}. {s.title}
+                             </span>
+                             <button onClick={() => generateSingleTkSection(work, idx)} className={`p-1 rounded-lg transition-colors ${
+                               s.status === 'completed' ? 'text-green-600 hover:bg-green-50' : 
+                               s.status === 'error' ? 'text-red-600 hover:bg-red-50' : 
+                               'text-blue-600 hover:bg-blue-50'
+                             }`}>
+                               {s.status === 'generating' ? <Loader2 className="w-4 animate-spin" /> : 
+                                s.status === 'completed' ? <CheckCircle2 className="w-5" /> : 
+                                s.status === 'error' ? <AlertCircle className="w-5" /> :
+                                <PlayCircle className="w-5" />}
+                             </button>
+                           </div>
+                         ))}
+                      </div>
+                    ))}
+
                     <button onClick={() => setCurrentStep('new-project')} className="w-full bg-slate-100 text-slate-600 py-3 rounded-xl font-black uppercase text-[10px] hover:bg-slate-200 transition-all">Назад к данным</button>
                   </div>
                 )}
@@ -502,6 +778,7 @@ export default function App() {
 
            {currentStep === 'dictionaries' && (
              <div className="space-y-6">
+                {/* ... (Existing dictionary UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Справочники</h2>
                 <div className="flex flex-col gap-2">
                    {['objects', 'clients', 'contractors', 'works'].map((tab: any) => (
@@ -518,6 +795,7 @@ export default function App() {
 
            {currentStep === 'ppr-register' && (
              <div className="space-y-6">
+                 {/* ... (Existing register UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Поиск проекта</h2>
                 <div className="relative">
                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 text-slate-400" />
@@ -528,6 +806,7 @@ export default function App() {
 
            {currentStep === 'knowledge' && (
              <div className="space-y-6">
+                {/* ... (Existing knowledge UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Библиотека норм</h2>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                    <div onClick={() => libraryInputRef.current?.click()} className="border-2 border-dashed border-blue-200 rounded-xl p-6 text-center hover:bg-blue-100/50 cursor-pointer">
@@ -588,37 +867,35 @@ export default function App() {
                     </table>
                  </div>
               </div>
-           ) : currentStep === 'knowledge' ? (
-              <div className="bg-white rounded-3xl shadow-xl p-10 max-w-3xl mx-auto border border-slate-100 text-center space-y-6">
-                 <div className="bg-blue-50 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto"><BookOpen className="text-blue-600 w-10 h-10" /></div>
-                 <h2 className="text-2xl font-black uppercase">База знаний AI</h2>
-                 <p className="text-slate-500 max-w-md mx-auto">Здесь хранятся ваши корпоративные стандарты, техкарты и нормативы. AI будет строить ответы, опираясь на эти данные.</p>
-                 <div className="grid grid-cols-2 gap-4">
-                    <div className="p-6 border border-slate-100 rounded-3xl text-left bg-slate-50/50">
-                       <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2">Загружено файлов</h4>
-                       <div className="text-3xl font-black text-blue-600">0</div>
-                    </div>
-                    <div className="p-6 border border-slate-100 rounded-3xl text-left bg-slate-50/50">
-                       <h4 className="text-[10px] font-black uppercase text-slate-400 mb-2">Проиндексировано</h4>
-                       <div className="text-3xl font-black text-green-600">100%</div>
-                    </div>
-                 </div>
-              </div>
            ) : (
              <div className="flex flex-col items-center gap-10">
                {docLayout.pages.map((page, idx) => {
                   if (page.type === 'title') {
                     return (
-                      <div key={idx} className="page-container">
-                        <div className="gost-frame"></div>
-                        <div className="gost-content title-page-content font-gost p-12 text-center flex flex-col justify-center">
-                           <div className="text-[14pt] font-black uppercase mb-16 underline decoration-2 underline-offset-8">{project.contractor || 'ОРГАНИЗАЦИЯ'}</div>
+                      <div key={idx} className="page-container title-page font-times">
+                        <div className="gost-content title-page-content text-center flex flex-col justify-between">
+                            {/* APPROVAL BLOCK */}
+                            <div className="flex justify-end mb-10">
+                                <div className="text-left w-[80mm] space-y-2 text-[12pt]">
+                                    <div className="uppercase font-bold">УТВЕРЖДАЮ</div>
+                                    <div className="border-b border-black py-1">Руководитель: ___________________</div>
+                                    <div className="border-b border-black py-1">________________ / {project.roleDeveloper || 'Ф.И.О.'}</div>
+                                    <div className="py-1">«___» _____________ 202__ г.</div>
+                                    <div className="mt-4 border-2 border-black w-[40mm] h-[40mm] flex items-center justify-center text-[8pt] text-slate-400 uppercase rounded-full">
+                                        М.П.
+                                    </div>
+                                </div>
+                            </div>
+
                            <div className="flex-1 flex flex-col items-center justify-center space-y-10">
+                              <div className="text-[14pt] font-black uppercase mb-10 underline decoration-2 underline-offset-8">{project.contractor || 'ОРГАНИЗАЦИЯ'}</div>
+                              
                               <div className="text-[18pt] font-black border-y-4 border-black py-8 px-12 uppercase leading-tight">ПРОЕКТ ПРОИЗВОДСТВА РАБОТ</div>
-                              <div className="text-[22pt] font-black uppercase tracking-tight px-4 leading-none">{project.projectName || '[НАЗВАНИЕ ПРОЕКТА]'}</div>
-                              <div className="space-y-6 pt-10">
-                                 <div className="text-[13pt] font-bold border-t-2 border-black pt-6 uppercase">Объект: {project.objectName || '[ОБЪЕКТ]'}</div>
-                                 <div className="text-[11pt] italic text-slate-600">Разработано на основании РД: {project.workingDocCode || '[ШИФР]'}</div>
+                              <div className="text-[20pt] font-black uppercase tracking-tight px-4 leading-none">{project.projectName || '[НАЗВАНИЕ ПРОЕКТА]'}</div>
+                              
+                              <div className="space-y-6 pt-10 text-[14pt]">
+                                 <div className="font-bold border-t-2 border-black pt-6 uppercase">Объект: {project.objectName || '[ОБЪЕКТ]'}</div>
+                                 <div className="italic">Разработано на основании РД: {project.workingDocCode || '[ШИФР]'}</div>
                               </div>
                            </div>
                            <div className="mt-auto font-bold text-[12pt] flex justify-between w-full px-10">
@@ -629,55 +906,77 @@ export default function App() {
                       </div>
                     );
                   }
+                  
+                  // DETERMINE STAMP TYPE
+                  // Page 2 (TOC) uses Form 5 (Large), others use Form 6 (Small)
+                  const isToc = page.type === 'toc';
+                  const stampType = isToc ? 'form5' : 'form6';
+
                   if (page.type === 'toc') {
                     return (
-                      <div key={idx} className="page-container">
+                      <div key={idx} className="page-container font-times">
                         <div className="gost-frame"></div>
-                        <div className="gost-content p-12 font-gost">
+                        <div className={`gost-content content-with-form-5`}>
                            <h3 className="text-[16pt] font-black text-center mb-10 border-b-2 border-black pb-2 uppercase">Содержание</h3>
                            <div className="space-y-4">
                               {docLayout.tocEntries.map((entry, eIdx) => (
-                                <div key={eIdx} className={`flex items-baseline gap-2 ${entry.level === 2 ? 'pl-8 text-[10pt]' : 'text-[11pt] font-bold'}`}>
+                                <div key={eIdx} className={`flex items-baseline gap-2 ${entry.level === 2 ? 'pl-8 text-[12pt]' : 'text-[13pt] font-bold'}`}>
                                    <span className="flex-shrink-0">{entry.title}</span>
-                                   <div className="flex-1 border-b border-dotted border-slate-400 translate-y-[-4px]"></div>
+                                   <div className="flex-1 border-b border-dotted border-black translate-y-[-4px]"></div>
                                    <span className="flex-shrink-0">{entry.page}</span>
                                 </div>
                               ))}
                            </div>
                         </div>
-                        <MainStamp pageNum={page.pageNum} />
+                        <MainStamp pageNum={page.pageNum} type={stampType} />
                       </div>
                     );
                   }
                   if (page.type === 'tk-separator') {
                     return (
-                      <div key={idx} className="page-container">
+                      <div key={idx} className="page-container font-times">
                         <div className="gost-frame"></div>
-                        <div className="gost-content flex flex-col items-center justify-center text-center p-20 space-y-12">
+                        <div className={`gost-content flex flex-col items-center justify-center text-center p-20 space-y-12 content-with-form-6`}>
                            <Scissors className="w-16 h-16 text-slate-300" />
                            <h2 className="text-[24pt] font-black uppercase border-b-8 border-black pb-6 px-10 leading-tight">{page.title}</h2>
                            <div className="text-[12pt] font-bold text-slate-400 uppercase tracking-widest">Технологическая карта</div>
                         </div>
-                        <MainStamp pageNum={page.pageNum} />
+                        <MainStamp pageNum={page.pageNum} type={stampType} />
                       </div>
                     );
                   }
                   return (
-                    <div key={idx} className="page-container">
+                    <div key={idx} className="page-container font-times">
                        <div className="gost-frame"></div>
-                       <div className="gost-content p-12">
+                       <div className={`gost-content content-with-form-6`}>
                           {page.isFirstPage && (
                             <div className="border-b-2 border-black mb-6 pb-2">
-                               <h3 className="text-[13pt] font-black uppercase">
+                               <h3 className="text-[14pt] font-black uppercase">
                                  {page.type === 'ppr' ? `${page.index}. ${page.title}` : `${page.index}. ${page.secTitle}`}
                                </h3>
                             </div>
                           )}
-                          <div className="text-[11pt] whitespace-pre-wrap leading-relaxed font-gost text-justify">
-                             {cleanMarkdown(page.content)}
+                          <div className="text-[12pt] leading-relaxed text-justify">
+                             <ReactMarkdown
+                               remarkPlugins={[remarkGfm]}
+                               components={{
+                                  table: (props) => <table className="w-full border-collapse border border-black mb-4 text-[11pt]" {...props} />,
+                                  thead: (props) => <thead className="bg-slate-50" {...props} />,
+                                  th: (props) => <th className="border border-black p-2 text-center font-bold align-middle bg-gray-100" {...props} />,
+                                  td: (props) => <td className="border border-black p-2 align-top" {...props} />,
+                                  p: (props) => <p className="mb-2 indent-[12mm]" {...props} />,
+                                  ul: (props) => <ul className="list-disc pl-8 mb-2" {...props} />,
+                                  ol: (props) => <ol className="list-decimal pl-8 mb-2" {...props} />,
+                                  h1: (props) => <div className="font-bold uppercase text-center mb-3 text-[14pt]" {...props} />,
+                                  h2: (props) => <div className="font-bold text-center mb-2 text-[13pt]" {...props} />,
+                                  h3: (props) => <div className="font-bold mb-1 text-[12pt]" {...props} />,
+                               }}
+                             >
+                               {page.content}
+                             </ReactMarkdown>
                           </div>
                        </div>
-                       <MainStamp pageNum={page.pageNum} />
+                       <MainStamp pageNum={page.pageNum} type={stampType} />
                     </div>
                   );
                })}
@@ -686,7 +985,7 @@ export default function App() {
         </section>
       </main>
       
-      <footer className="no-print bg-slate-900 px-8 py-3 flex items-center justify-between text-[10px] font-black uppercase text-slate-500 border-t border-slate-800">
+      <footer className="no-print bg-slate-900 px-8 py-3 flex items-center justify-between text-[10px] font-black uppercase text-slate-500 border-t border-slate-800 font-sans">
          <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isGeneratingAll ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`}></div>
@@ -710,10 +1009,10 @@ function SearchableInput({ label, value, onChange, suggestions, icon }: any) {
   }, []);
   return (
     <div className="space-y-1 relative" ref={ref}>
-      <label className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ml-1 text-blue-700">{icon} {label}</label>
-      <input type="text" value={value} onChange={(e) => { onChange(e.target.value); setIsOpen(true); }} onFocus={() => setIsOpen(true)} className="w-full bg-white border border-blue-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none shadow-sm transition-all" />
+      <label className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ml-1 text-blue-700 font-sans">{icon} {label}</label>
+      <input type="text" value={value} onChange={(e) => { onChange(e.target.value); setIsOpen(true); }} onFocus={() => setIsOpen(true)} className="w-full bg-white border border-blue-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none shadow-sm transition-all font-sans" />
       {isOpen && suggestions.length > 0 && (
-        <div className="absolute z-[250] left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-2xl max-h-48 overflow-y-auto custom-scrollbar">
+        <div className="absolute z-[250] left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-2xl max-h-48 overflow-y-auto custom-scrollbar font-sans">
           {suggestions.map((s: string) => (
             <button key={s} onClick={() => { onChange(s); setIsOpen(false); }} className="w-full text-left px-4 py-2 text-xs font-bold hover:bg-blue-50 transition-colors border-b border-slate-50 last:border-0">{s}</button>
           ))}
@@ -737,13 +1036,13 @@ function WorkTreeSelect({ label, selectedItems, onChange, catalog }: any) {
   };
   return (
     <div className="space-y-1 relative" ref={ref}>
-      <label className="text-[10px] font-black uppercase ml-1 text-slate-400">{label}</label>
-      <div onClick={() => setIsOpen(!isOpen)} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold flex justify-between items-center cursor-pointer shadow-sm hover:border-blue-300 transition-all">
+      <label className="text-[10px] font-black uppercase ml-1 text-slate-400 font-sans">{label}</label>
+      <div onClick={() => setIsOpen(!isOpen)} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold flex justify-between items-center cursor-pointer shadow-sm hover:border-blue-300 transition-all font-sans">
         <span className="truncate">{selectedItems.length ? `Выбрано: ${selectedItems.length}` : 'Выбрать работы...'}</span>
         <ChevronDown className="w-4 text-slate-400" />
       </div>
       {isOpen && (
-        <div className="absolute z-[250] left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-2xl max-h-64 overflow-y-auto p-2 custom-scrollbar">
+        <div className="absolute z-[250] left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-2xl max-h-64 overflow-y-auto p-2 custom-scrollbar font-sans">
            {Object.entries(catalog).map(([cat, types]: any) => (
              <div key={cat} className="mb-3">
                 <div className="text-[9px] font-black uppercase text-slate-400 px-2 mb-1 border-l-2 border-slate-200 ml-1">{cat}</div>

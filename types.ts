@@ -53,7 +53,7 @@ export interface ProjectData {
   contractor: string;
   location: string;
   workType: string[];
-  workDeadlines: Record<string, string>;
+  workDeadlines: Record<string, { start: string; end: string }>;
   workingDocName: string;
   workingDocCode: string;
   roleDeveloper: string;
