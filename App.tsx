@@ -56,10 +56,14 @@ import {
   PlayCircle,
   RefreshCw,
   Sparkle,
-  ListOrdered
+  ListOrdered,
+  ExternalLink,
+  CreditCard,
+  Square,
+  Map
 } from 'lucide-react';
 import { ProjectData, DocumentType, DocSection, WorkingDoc, SavedProject, ConstructionObject, ClientEntry, ContractorEntry, ReferenceFile } from './types';
-import { generateSectionContent, extractDocInfo, extractWorksFromEstimate } from './geminiService';
+import { generateSectionContent, extractDocInfo, extractWorksFromEstimate, extractPosData } from './geminiService';
 
 interface WorkCatalogNode {
   [category: string]: {
@@ -146,7 +150,7 @@ const INITIAL_PROJECT: ProjectData = {
   workType: [],
   workDeadlines: {},
   workingDocName: '',
-  workingDocCode: '',
+  workingDocCode: 'РД ППР', // Set default cipher
   roleDeveloper: '',
   roleClientChiefEngineer: '',
   roleAuthorSupervision: '',
@@ -157,20 +161,113 @@ const INITIAL_PROJECT: ProjectData = {
   aiWorksFromDocs: [],
 };
 
-const splitContentIntoPages = (content: string, charsPerPage: number = 2200): string[] => {
+// --- Advanced Pagination Engine (Queue Based) ---
+const splitContentIntoPages = (content: string, charsPerPage: number = 2500): string[] => {
   if (!content) return [""];
+  
   const pages: string[] = [];
-  let remaining = content;
-  while (remaining.length > 0) {
-    if (remaining.length <= charsPerPage) {
-      pages.push(remaining);
-      break;
+  // Используем очередь строк. Если строку нужно разбить, остаток возвращается в начало очереди.
+  const linesQueue = content.split('\n');
+  
+  let currentPage = "";
+  let currentLen = 0;
+
+  // Настройка "веса" элементов (в символах)
+  const COST_NEWLINE = 20; 
+  const COST_HEADER_BONUS = 150; // Заголовки занимают больше места
+  const COST_TABLE_ROW_BONUS = 50; // Таблицы требуют отступов
+  const COST_LIST_BONUS = 30; // Списки
+  const MIN_SPACE_TO_FILL = 150; // Минимальное место, которое стоит заполнять (иначе перенос)
+
+  while (linesQueue.length > 0) {
+    const line = linesQueue.shift()!; // Берем первую строку
+    const trimmed = line.trim();
+    
+    // Рассчитываем стоимость строки
+    let lineCost = line.length + COST_NEWLINE;
+    let isStructure = false;
+    
+    // Проверка на структурные элементы (их лучше не рвать)
+    if (trimmed.startsWith('#')) { lineCost += COST_HEADER_BONUS; isStructure = true; }
+    else if (trimmed.startsWith('|')) { lineCost += COST_TABLE_ROW_BONUS; isStructure = true; }
+    else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.match(/^\d+\./)) { lineCost += COST_LIST_BONUS; isStructure = true; }
+
+    // 1. Если влезает целиком - добавляем
+    if (currentLen + lineCost <= charsPerPage) {
+       currentPage += (currentPage ? "\n" : "") + line;
+       currentLen += lineCost;
+       continue;
     }
-    let splitIdx = remaining.lastIndexOf('\n', charsPerPage);
-    if (splitIdx < charsPerPage * 0.7) splitIdx = charsPerPage;
-    pages.push(remaining.substring(0, splitIdx).trim());
-    remaining = remaining.substring(splitIdx).trim();
+
+    // 2. Не влезает. Считаем остаток места.
+    const spaceLeft = charsPerPage - currentLen;
+
+    // Если места совсем мало (меньше минимума), то нет смысла пытаться впихнуть кусок.
+    // Просто переносим на новую страницу.
+    if (spaceLeft < MIN_SPACE_TO_FILL) {
+       pages.push(currentPage);
+       currentPage = "";
+       currentLen = 0;
+       linesQueue.unshift(line); // Возвращаем строку в начало очереди для новой страницы
+       continue;
+    }
+
+    // Если это заголовок или таблица - их рвать нельзя.
+    // Если они не влезают, переносим на новую страницу.
+    if (isStructure) {
+       pages.push(currentPage);
+       currentPage = "";
+       currentLen = 0;
+       linesQueue.unshift(line);
+       continue;
+    }
+
+    // 3. Это обычный текст. Место есть. РВЕМ ЕГО!
+    // Находим пробел, ближайший к концу доступного места.
+    // Отступаем немного назад (например, на 10-20 символов) для страховки.
+    const safeLimit = Math.max(0, spaceLeft - 10);
+    let splitIdx = line.lastIndexOf(' ', safeLimit);
+
+    // Если пробел не найден (одно длинное слово) или кусок получается слишком маленьким (висячая строка)
+    if (splitIdx === -1 || splitIdx < 50) {
+       // Если строка сама по себе огромная (больше страницы), нам придется её резать всё равно.
+       // Но если она просто длинная, но меньше страницы, лучше перенести целиком.
+       if (lineCost > charsPerPage) {
+           // Принудительная резка по лимиту, если это монструозная строка
+           splitIdx = safeLimit; 
+       } else {
+           // Перенос
+           pages.push(currentPage);
+           currentPage = "";
+           currentLen = 0;
+           linesQueue.unshift(line);
+           continue;
+       }
+    }
+
+    // Режем
+    const part1 = line.substring(0, splitIdx);
+    const part2 = line.substring(splitIdx).trim(); // Убираем пробел в начале остатка
+
+    // Добавляем первую часть и закрываем страницу
+    currentPage += (currentPage ? "\n" : "") + part1;
+    pages.push(currentPage);
+    
+    // Сброс для новой страницы
+    currentPage = "";
+    currentLen = 0;
+
+    // Возвращаем остаток в очередь (он пойдет на новую страницу, и может быть снова разбит, если он огромный)
+    if (part2.length > 0) {
+        linesQueue.unshift(part2);
+    }
   }
+
+  // Добавляем последний хвост
+  if (currentPage) {
+    pages.push(currentPage);
+  }
+
   return pages.length > 0 ? pages : [""];
 };
 
@@ -178,18 +275,23 @@ export default function App() {
   const [project, setProject] = useState<ProjectData>(INITIAL_PROJECT);
   const [pprSections, setPprSections] = useState<DocSection[]>(PPR_SECTIONS_TEMPLATE);
   const [currentStep, setCurrentStep] = useState<'new-project' | 'edit' | 'dictionaries' | 'ppr-register' | 'knowledge'>('new-project');
-  const [dictTab, setDictTab] = useState<'objects' | 'clients' | 'contractors' | 'works'>('objects');
+  const [dictTab, setDictTab] = useState<'objects' | 'clients' | 'contractors' | 'works' | 'system'>('objects');
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isAnalyzingPos, setIsAnalyzingPos] = useState(false);
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'error' | 'info'} | null>(null);
   const [dictionaries, setDictionaries] = useState<HierarchicalDict>(INITIAL_HIERARCHICAL_DICT);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const estimateInputRef = useRef<HTMLInputElement>(null);
+  const posInputRef = useRef<HTMLInputElement>(null);
   const libraryInputRef = useRef<HTMLInputElement>(null);
+  
+  // Ref to control the generation loop
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const filteredProjects = useMemo(() => {
     return savedProjects.filter(p => 
@@ -204,13 +306,13 @@ export default function App() {
     const pages: any[] = [];
     const tocEntries: { title: string; page: number; level: number }[] = [];
 
-    // Title Page (No stamp, no frame)
     pages.push({ type: 'title', pageNum: currentPage++ });
-    
-    // TOC Placeholder (Uses Form 5 - Large Stamp)
     pages.push({ type: 'toc', pageNum: currentPage++ });
     
-    // PPR Sections (Use Form 6 - Small Stamp)
+    // Лист согласования (Approval Sheet)
+    pages.push({ type: 'approval-sheet', pageNum: currentPage++, title: 'Лист согласования' });
+    tocEntries.push({ title: 'Лист согласования', page: currentPage - 1, level: 1 });
+
     pprSections.forEach((s, idx) => {
       const content = s.content || 'Раздел ожидает генерации...';
       const sectionPages = splitContentIntoPages(content);
@@ -220,7 +322,6 @@ export default function App() {
       });
     });
 
-    // TK Sections (Use Form 6 - Small Stamp)
     project.workType.forEach((work, wIdx) => {
       pages.push({ type: 'tk-separator', title: work, pageNum: currentPage++ });
       tocEntries.push({ title: `Приложение ${wIdx + 1}. ТК на ${work}`, page: currentPage - 1, level: 1 });
@@ -235,13 +336,15 @@ export default function App() {
       });
     });
 
+    // Лист ознакомления (Acquaintance Sheet) at the end
+    pages.push({ type: 'acquaintance-sheet', pageNum: currentPage++, title: 'Лист ознакомления' });
+    tocEntries.push({ title: 'Лист ознакомления', page: currentPage - 1, level: 1 });
+
     return { pages, tocEntries, totalPages: currentPage - 1 };
   }, [pprSections, project.workType, project.tkMap]);
 
-  // Validation for readiness to generate
   const isProjectReady = useMemo(() => {
     if (project.workType.length === 0) return false;
-    // Check if all selected works have start and end dates
     return project.workType.every(work => 
       project.workDeadlines[work]?.start && project.workDeadlines[work]?.end
     );
@@ -254,9 +357,10 @@ export default function App() {
     if (dicts) try { setDictionaries(prev => ({ ...prev, ...JSON.parse(dicts) })); } catch (e) {}
   }, []);
 
+  // ... (Notification and Update functions remain the same) ...
   const showNotification = (message: string, type: 'success' | 'error' | 'info') => {
     setNotification({ message, type });
-    setTimeout(() => setNotification(null), 4000);
+    setTimeout(() => setNotification(null), 5000);
   };
 
   const updateProject = (field: keyof ProjectData, value: any) => {
@@ -283,9 +387,7 @@ export default function App() {
         });
         next.tkMap = newTkMap;
         
-        // Cleanup deadlines for removed works
         const newDeadlines = { ...prev.workDeadlines };
-        // Remove keys not in new list
         Object.keys(newDeadlines).forEach(k => {
           if (!(value as string[]).includes(k)) delete newDeadlines[k];
         });
@@ -308,6 +410,7 @@ export default function App() {
     }));
   };
 
+  // ... (Upload handlers remain the same) ...
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -379,6 +482,45 @@ export default function App() {
     }
   };
 
+  const handlePosUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsAnalyzingPos(true);
+    try {
+      const base64 = await new Promise<string>((resolve) => {
+         const reader = new FileReader();
+         reader.onload = (e) => resolve((e.target?.result as string).split(',')[1]);
+         reader.readAsDataURL(file);
+      });
+      
+      setProject(p => ({ ...p, posDoc: { name: file.name, data: base64, mimeType: file.type } }));
+      
+      const posData = await extractPosData(base64, file.type);
+      if (posData) {
+          setProject(prev => {
+              const next = { ...prev };
+              if (posData.projectName) next.projectName = posData.projectName;
+              if (posData.objectName) next.objectName = posData.objectName;
+              if (posData.location) next.location = posData.location;
+              if (posData.mainWorks && posData.mainWorks.length > 0) {
+                  next.workType = Array.from(new Set([...prev.workType, ...posData.mainWorks]));
+              }
+              return next;
+          });
+          showNotification('ПОС успешно проанализирован. Данные обновлены.', 'success');
+      } else {
+          showNotification('ПОС загружен, но данные извлечь не удалось. Он будет использован при генерации.', 'info');
+      }
+    } catch (e) {
+      console.error(e);
+      showNotification("Ошибка при анализе ПОС", "error");
+    } finally {
+      setIsAnalyzingPos(false);
+      if (posInputRef.current) posInputRef.current.value = '';
+    }
+  };
+
+  // ... (Generation handlers remain the same) ...
   const generateSinglePprSection = async (idx: number) => {
     setPprSections(prev => { const n = [...prev]; n[idx].status = 'generating'; return n; });
     try {
@@ -386,7 +528,6 @@ export default function App() {
       setPprSections(prev => { const n = [...prev]; n[idx].content = content; n[idx].status = 'completed'; return n; });
     } catch (e: any) {
       setPprSections(prev => { const n = [...prev]; n[idx].status = 'error'; return n; });
-      // Rethrow to allow batch handler to catch it
       throw e;
     }
   };
@@ -432,24 +573,33 @@ export default function App() {
     return pprComplete && tkComplete;
   }, [pprSections, project.workType, project.tkMap]);
 
+  const handleStopGeneration = () => {
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+          setIsGeneratingAll(false);
+          showNotification('Генерация остановлена пользователем', 'info');
+      }
+  };
+
   const handleGenerateAll = async () => {
     if (isGeneratingAll) return;
     setIsGeneratingAll(true);
+    abortControllerRef.current = new AbortController();
     
-    // Utility to wait
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-    // Helper to process a single item with quota-aware retry logic
     const processItem = async (action: () => Promise<void>, name: string) => {
-        const maxRetries = 3;
+        const maxRetries = 2;
         for (let i = 0; i < maxRetries; i++) {
+            if (abortControllerRef.current?.signal.aborted) {
+                return false;
+            }
+
             try {
                 await action();
-                // If successful, wait a bit to avoid hitting RPM limits immediately for the next one
-                await delay(10000); 
+                await delay(8000); 
                 return true;
             } catch (error: any) {
-                // Check if it's a quota error
                 const errStr = JSON.stringify(error);
                 const isQuota = 
                     error?.status === 429 || 
@@ -461,15 +611,17 @@ export default function App() {
 
                 if (isQuota) {
                     if (i < maxRetries - 1) {
-                        const waitTime = 60000; // 60s
-                        showNotification(`Лимит API (${name}). Пауза 60с...`, 'info');
-                        await delay(waitTime);
+                        const waitTime = 30000; 
+                        showNotification(`Лимит API (${name}). Пауза 30с... Перейдите в Справочники > Система для инструкций по увеличению лимита.`, 'info');
+                        for (let k = 0; k < 30; k++) {
+                             if (abortControllerRef.current?.signal.aborted) return false;
+                             await delay(1000);
+                        }
                         continue;
                     } else {
-                         showNotification(`Не удалось сгенерировать ${name} из-за лимитов.`, 'error');
+                         showNotification(`Не удалось сгенерировать ${name} из-за лимитов. Подождите пару минут.`, 'error');
                     }
                 } else {
-                    // Just a regular error
                     showNotification(`Ошибка генерации ${name}.`, 'error');
                 }
                 return false; 
@@ -479,36 +631,34 @@ export default function App() {
     };
     
     try {
-      // 1. Generate PPR Sections
       for (let i = 0; i < pprSections.length; i++) {
+          if (abortControllerRef.current?.signal.aborted) break;
           if (pprSections[i].status === 'completed') continue; 
           await processItem(() => generateSinglePprSection(i), `ППР-${i+1}`);
       }
-
-      // 2. Generate TK Sections
       for (const work of project.workType) {
+         if (abortControllerRef.current?.signal.aborted) break;
          const sections = project.tkMap[work] || [];
          for (let i = 0; i < sections.length; i++) {
+           if (abortControllerRef.current?.signal.aborted) break;
            if (sections[i].status === 'completed') continue;
            await processItem(() => generateSingleTkSection(work, i), `ТК-${work}-${i+1}`);
          }
       }
-
     } catch (e) {
-      console.error("Batch generation stopped due to error:", e);
+      console.error("Batch generation stopped:", e);
     } finally {
       setIsGeneratingAll(false);
+      abortControllerRef.current = null;
     }
   };
 
   const MainStamp = ({ pageNum, type = 'form6' }: { pageNum: number, type?: 'form5' | 'form6' }) => {
-    // FORM 5 (40mm) - Used on First TOC Page
     if (type === 'form5') {
         return (
             <div className="main-stamp stamp-form-5 font-times">
                 <table className="stamp-table">
                     <tbody>
-                        {/* Row 1: Approvals & Project Name */}
                         <tr style={{ height: '15mm' }}>
                             <td colSpan={2} style={{ width: '120mm' }} className="border-r border-black p-0">
                                 <div className="grid grid-cols-5 h-full text-center">
@@ -523,7 +673,6 @@ export default function App() {
                                 <div className="text-[7pt] font-bold uppercase leading-tight">{project.workingDocCode || 'ШИФР'}</div>
                             </td>
                         </tr>
-                        {/* Row 2: Roles */}
                         <tr style={{ height: '10mm' }}>
                             <td style={{ width: '40mm' }} className="p-0 border-r border-black">
                                 <div className="grid grid-rows-2 h-full text-[7pt]">
@@ -547,7 +696,6 @@ export default function App() {
                                 </div>
                             </td>
                         </tr>
-                         {/* Row 3: Bottom */}
                         <tr style={{ height: '15mm' }}>
                             <td colSpan={2} className="border-r border-black text-center align-middle text-[7pt]">Н.контр.</td>
                             <td colSpan={1} className="border-r border-black text-center align-middle text-[8pt] font-black uppercase">{project.contractor}</td>
@@ -564,7 +712,6 @@ export default function App() {
         );
     }
 
-    // FORM 6 (15mm) - Used on Subsequent Pages
     return (
         <div className="main-stamp stamp-form-6 font-times">
             <table className="stamp-table">
@@ -599,9 +746,9 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col font-times">
       {notification && (
-        <div className={`fixed top-20 right-6 z-[1000] p-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce ${notification.type === 'success' ? 'bg-green-600 text-white' : notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>
+        <div className={`fixed top-20 right-6 z-[1000] p-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-right-10 duration-300 ${notification.type === 'success' ? 'bg-green-600 text-white' : notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'}`}>
            {notification.type === 'success' ? <CheckCircle2 className="w-5" /> : <Info className="w-5" />}
-           <span className="text-xs font-black uppercase">{notification.message}</span>
+           <span className="text-xs font-black uppercase max-w-sm">{notification.message}</span>
         </div>
       )}
 
@@ -623,6 +770,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 flex overflow-hidden font-sans">
+        {/* ... (Aside content same as previous) ... */}
         <aside className="no-print w-[400px] bg-white border-r border-slate-200 overflow-y-auto p-6 space-y-8 no-scrollbar">
            {(currentStep === 'new-project' || currentStep === 'edit') && (
              <div className="space-y-6">
@@ -637,16 +785,21 @@ export default function App() {
                       <SearchableInput label="Подрядчик" value={project.contractor} onChange={(v: string) => updateProject('contractor', v)} suggestions={dictionaries.contractors.map(c => c.name)} icon={<Building2 className="w-4" />} />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div onClick={() => !isUploading && fileInputRef.current?.click()} className={`border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center transition-all ${isUploading ? 'bg-slate-50 cursor-not-allowed opacity-50' : 'hover:bg-blue-50 cursor-pointer group'}`}>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div onClick={() => !isUploading && fileInputRef.current?.click()} className={`border-2 border-dashed border-slate-200 rounded-2xl p-2 text-center transition-all ${isUploading ? 'bg-slate-50 cursor-not-allowed opacity-50' : 'hover:bg-blue-50 cursor-pointer group'}`}>
                         <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleFileUpload} />
-                        {isUploading ? <Loader2 className="w-6 h-6 text-blue-500 mx-auto mb-1 animate-spin" /> : <Upload className="w-6 h-6 text-slate-300 mx-auto mb-1 group-hover:text-blue-500" />}
-                        <p className="text-[9px] font-black text-slate-500 uppercase">{isUploading ? 'Загрузка...' : 'Импорт РД'}</p>
+                        {isUploading ? <Loader2 className="w-5 h-5 text-blue-500 mx-auto mb-1 animate-spin" /> : <Upload className="w-5 h-5 text-slate-300 mx-auto mb-1 group-hover:text-blue-500" />}
+                        <p className="text-[9px] font-black text-slate-500 uppercase leading-none">{isUploading ? '...' : 'РД'}</p>
                       </div>
-                      <div onClick={() => !isExtracting && estimateInputRef.current?.click()} className={`border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center transition-all ${isExtracting ? 'bg-slate-50 cursor-not-allowed opacity-50' : 'hover:bg-green-50 cursor-pointer group'}`}>
+                      <div onClick={() => !isExtracting && estimateInputRef.current?.click()} className={`border-2 border-dashed border-slate-200 rounded-2xl p-2 text-center transition-all ${isExtracting ? 'bg-slate-50 cursor-not-allowed opacity-50' : 'hover:bg-green-50 cursor-pointer group'}`}>
                         <input type="file" ref={estimateInputRef} className="hidden" onChange={handleEstimateUpload} />
-                        {isExtracting ? <Loader2 className="w-6 h-6 text-green-500 mx-auto mb-1 animate-spin" /> : <Calculator className="w-6 h-6 text-slate-300 mx-auto mb-1 group-hover:text-green-500" />}
-                        <p className="text-[9px] font-black text-slate-500 uppercase">{isExtracting ? 'Анализ...' : 'Импорт сметы'}</p>
+                        {isExtracting ? <Loader2 className="w-5 h-5 text-green-500 mx-auto mb-1 animate-spin" /> : <Calculator className="w-5 h-5 text-slate-300 mx-auto mb-1 group-hover:text-green-500" />}
+                        <p className="text-[9px] font-black text-slate-500 uppercase leading-none">{isExtracting ? '...' : 'Смета'}</p>
+                      </div>
+                      <div onClick={() => !isAnalyzingPos && posInputRef.current?.click()} className={`border-2 border-dashed border-slate-200 rounded-2xl p-2 text-center transition-all ${isAnalyzingPos ? 'bg-slate-50 cursor-not-allowed opacity-50' : 'hover:bg-purple-50 cursor-pointer group'}`}>
+                        <input type="file" ref={posInputRef} className="hidden" onChange={handlePosUpload} />
+                        {isAnalyzingPos ? <Loader2 className="w-5 h-5 text-purple-500 mx-auto mb-1 animate-spin" /> : <FileText className="w-5 h-5 text-slate-300 mx-auto mb-1 group-hover:text-purple-500" />}
+                        <p className="text-[9px] font-black text-slate-500 uppercase leading-none">{isAnalyzingPos ? '...' : 'ПОС'}</p>
                       </div>
                     </div>
 
@@ -703,26 +856,35 @@ export default function App() {
                   <div className="space-y-6">
                     <div className="flex items-center justify-between">
                        <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Генерация разделов</h2>
-                       <button 
-                         onClick={handleGenerateAll}
-                         disabled={isGeneratingAll}
-                         className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
-                           isAllComplete 
-                             ? 'bg-green-100 text-green-700 hover:bg-green-200' 
-                             : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                         }`}
-                       >
-                         {isGeneratingAll ? (
-                           <><Loader2 className="w-4 animate-spin" /> Генерация...</>
-                         ) : isAllComplete ? (
-                           <><CheckCircle2 className="w-4" /> Готово</>
-                         ) : (
-                           <><Zap className="w-4" /> Старт AI</>
-                         )}
-                       </button>
+                       <div className="flex gap-2">
+                            {isGeneratingAll && (
+                                <button
+                                    onClick={handleStopGeneration}
+                                    className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all bg-red-50 text-red-600 hover:bg-red-100"
+                                >
+                                    <Square className="w-3 fill-current" /> Стоп
+                                </button>
+                            )}
+                           <button 
+                             onClick={handleGenerateAll}
+                             disabled={isGeneratingAll}
+                             className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
+                               isAllComplete 
+                                 ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                                 : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                             }`}
+                           >
+                             {isGeneratingAll ? (
+                               <><Loader2 className="w-4 animate-spin" /> Генерация...</>
+                             ) : isAllComplete ? (
+                               <><CheckCircle2 className="w-4" /> Готово</>
+                             ) : (
+                               <><Zap className="w-4" /> Старт AI</>
+                             )}
+                           </button>
+                       </div>
                     </div>
                     
-                    {/* PPR Sections List */}
                     <div className="space-y-2">
                        <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2">Общий ППР</h3>
                        {pprSections.map((s, idx) => (
@@ -744,7 +906,6 @@ export default function App() {
                        ))}
                     </div>
 
-                    {/* TK Sections Lists (Per Work Type) */}
                     {project.workType.map((work, wIdx) => (
                       <div key={work} className="space-y-2 mt-4 pt-4 border-t border-slate-100">
                          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2 truncate" title={work}>
@@ -775,18 +936,19 @@ export default function App() {
                 )}
              </div>
            )}
-
+           
+           {/* ... (Other sidebar sections: dictionaries, ppr-register, knowledge - same as previous) ... */}
            {currentStep === 'dictionaries' && (
              <div className="space-y-6">
-                {/* ... (Existing dictionary UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Справочники</h2>
                 <div className="flex flex-col gap-2">
-                   {['objects', 'clients', 'contractors', 'works'].map((tab: any) => (
+                   {['objects', 'clients', 'contractors', 'works', 'system'].map((tab: any) => (
                      <button key={tab} onClick={() => setDictTab(tab)} className={`w-full text-left px-4 py-3 rounded-xl text-xs font-black uppercase transition-all ${dictTab === tab ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}>
                        {tab === 'objects' && 'Строительные объекты'}
                        {tab === 'clients' && 'Заказчики / ГИПы'}
                        {tab === 'contractors' && 'Подрядные организации'}
                        {tab === 'works' && 'Каталог видов работ'}
+                       {tab === 'system' && 'Система и Квоты'}
                      </button>
                    ))}
                 </div>
@@ -795,7 +957,6 @@ export default function App() {
 
            {currentStep === 'ppr-register' && (
              <div className="space-y-6">
-                 {/* ... (Existing register UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Поиск проекта</h2>
                 <div className="relative">
                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 text-slate-400" />
@@ -806,7 +967,6 @@ export default function App() {
 
            {currentStep === 'knowledge' && (
              <div className="space-y-6">
-                {/* ... (Existing knowledge UI remains unchanged) ... */}
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-slate-300 pl-3">Библиотека норм</h2>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                    <div onClick={() => libraryInputRef.current?.click()} className="border-2 border-dashed border-blue-200 rounded-xl p-6 text-center hover:bg-blue-100/50 cursor-pointer">
@@ -840,32 +1000,62 @@ export default function App() {
                   <div className="col-span-full py-20 text-center text-slate-400 font-bold italic">Проекты не найдены</div>
                 )}
              </div>
-           ) : currentStep === 'dictionaries' ? (
-              <div className="bg-white rounded-3xl shadow-xl p-10 max-w-4xl mx-auto border border-slate-100">
-                 <div className="flex items-center justify-between mb-8">
-                    <h2 className="text-2xl font-black uppercase tracking-tight text-slate-800">Редактор справочника</h2>
-                    <button className="bg-blue-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-2"><Plus className="w-4" /> Добавить</button>
-                 </div>
-                 <div className="overflow-hidden rounded-2xl border border-slate-100">
-                    <table className="w-full text-left">
-                       <thead className="bg-slate-50 border-b border-slate-100">
-                          <tr>
-                             <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Наименование</th>
-                             <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400">Параметры</th>
-                             <th className="px-6 py-4 text-right"></th>
-                          </tr>
-                       </thead>
-                       <tbody className="divide-y divide-slate-50">
-                          {dictTab === 'objects' && dictionaries.objects.map(o => (
-                            <tr key={o.id} className="hover:bg-slate-50 transition-colors">
-                               <td className="px-6 py-4 text-sm font-bold text-slate-700">{o.name}</td>
-                               <td className="px-6 py-4 text-xs text-slate-500">{o.address}</td>
-                               <td className="px-6 py-4 text-right"><button className="text-slate-300 hover:text-red-500"><Trash2 className="w-4" /></button></td>
-                            </tr>
-                          ))}
-                       </tbody>
-                    </table>
-                 </div>
+           ) : currentStep === 'dictionaries' && dictTab === 'system' ? (
+              <div className="bg-white rounded-3xl shadow-xl p-10 max-w-4xl mx-auto border border-slate-100 space-y-8 animate-in fade-in zoom-in-95 duration-300">
+                {/* ... (Quota Info Section - same as previous) ... */}
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="p-3 bg-blue-100 rounded-2xl text-blue-600"><CreditCard className="w-8 h-8" /></div>
+                  <div>
+                    <h2 className="text-2xl font-black uppercase text-slate-800 leading-none">Управление квотами API</h2>
+                    <p className="text-xs text-slate-400 font-bold uppercase mt-1">Инструкция по увеличению лимитов для StroyDoc AI</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="p-6 rounded-2xl bg-slate-50 border border-slate-100 space-y-4">
+                    <h3 className="text-sm font-black uppercase text-slate-700 flex items-center gap-2"><Sparkle className="w-4 text-yellow-500" /> Текущие лимиты (Free)</h3>
+                    <ul className="text-xs space-y-2 font-bold text-slate-500">
+                      <li className="flex justify-between border-b border-slate-200 pb-1"><span>Запросов (RPM):</span> <span className="text-red-500">2 - 15</span></li>
+                      <li className="flex justify-between border-b border-slate-200 pb-1"><span>Токенов (TPM):</span> <span className="text-red-500">32,000</span></li>
+                      <li className="flex justify-between border-b border-slate-200 pb-1"><span>Запросов в день:</span> <span className="text-red-500">1,500</span></li>
+                    </ul>
+                    <p className="text-[10px] italic text-slate-400">Бесплатный уровень вызывает ошибку 429 при массовой генерации ППР.</p>
+                  </div>
+
+                  <div className="p-6 rounded-2xl bg-blue-600 text-white space-y-4 shadow-xl">
+                    <h3 className="text-sm font-black uppercase flex items-center gap-2"><Zap className="w-4" /> Платный тариф (Pay-as-you-go)</h3>
+                    <ul className="text-xs space-y-2 font-bold opacity-90">
+                      <li className="flex justify-between border-b border-blue-500 pb-1"><span>Запросов (RPM):</span> <span>До 360</span></li>
+                      <li className="flex justify-between border-b border-blue-500 pb-1"><span>Токенов (TPM):</span> <span>До 4,000,000</span></li>
+                      <li className="flex justify-between border-b border-blue-500 pb-1"><span>Стабильность:</span> <span>Максимальная</span></li>
+                    </ul>
+                    <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="flex items-center justify-center gap-2 bg-white text-blue-600 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-slate-100 transition-all">
+                      Подключить биллинг <ExternalLink className="w-3" />
+                    </a>
+                  </div>
+                </div>
+
+                <div className="space-y-4 border-t border-slate-100 pt-8">
+                  <h3 className="text-sm font-black uppercase text-slate-800">Как повысить лимиты вручную?</h3>
+                  <div className="space-y-3">
+                    <div className="flex gap-4 items-start">
+                      <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-black shrink-0">1</div>
+                      <p className="text-xs font-medium text-slate-600">Перейдите в <a href="https://console.cloud.google.com/" className="text-blue-600 underline">Google Cloud Console</a> и выберите ваш проект.</p>
+                    </div>
+                    <div className="flex gap-4 items-start">
+                      <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-black shrink-0">2</div>
+                      <p className="text-xs font-medium text-slate-600">В меню выберите <b>"IAM & Admin" > "Quotas"</b>.</p>
+                    </div>
+                    <div className="flex gap-4 items-start">
+                      <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-black shrink-0">3</div>
+                      <p className="text-xs font-medium text-slate-600">Найдите <b>"Generative AI Analysis API"</b> или <b>"Gemini API"</b>.</p>
+                    </div>
+                    <div className="flex gap-4 items-start">
+                      <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-black shrink-0">4</div>
+                      <p className="text-xs font-medium text-slate-600">Нажмите <b>"Edit Quotas"</b> и отправьте запрос на увеличение RPM (например, до 100).</p>
+                    </div>
+                  </div>
+                </div>
               </div>
            ) : (
              <div className="flex flex-col items-center gap-10">
@@ -874,27 +1064,23 @@ export default function App() {
                     return (
                       <div key={idx} className="page-container title-page font-times">
                         <div className="gost-content title-page-content text-center flex flex-col justify-between">
-                            {/* APPROVAL BLOCK */}
                             <div className="flex justify-end mb-10">
                                 <div className="text-left w-[80mm] space-y-2 text-[12pt]">
                                     <div className="uppercase font-bold">УТВЕРЖДАЮ</div>
-                                    <div className="border-b border-black py-1">Руководитель: ___________________</div>
-                                    <div className="border-b border-black py-1">________________ / {project.roleDeveloper || 'Ф.И.О.'}</div>
+                                    <div className="py-1">Руководитель: ___________________</div>
+                                    <div className="py-1">________________ / {project.roleDeveloper || 'Ф.И.О.'}</div>
                                     <div className="py-1">«___» _____________ 202__ г.</div>
-                                    <div className="mt-4 border-2 border-black w-[40mm] h-[40mm] flex items-center justify-center text-[8pt] text-slate-400 uppercase rounded-full">
-                                        М.П.
-                                    </div>
                                 </div>
                             </div>
 
                            <div className="flex-1 flex flex-col items-center justify-center space-y-10">
-                              <div className="text-[14pt] font-black uppercase mb-10 underline decoration-2 underline-offset-8">{project.contractor || 'ОРГАНИЗАЦИЯ'}</div>
+                              <div className="text-[14pt] font-black uppercase mb-10">{project.contractor || 'ОРГАНИЗАЦИЯ'}</div>
                               
-                              <div className="text-[18pt] font-black border-y-4 border-black py-8 px-12 uppercase leading-tight">ПРОЕКТ ПРОИЗВОДСТВА РАБОТ</div>
+                              <div className="text-[18pt] font-black py-8 px-12 uppercase leading-tight">ПРОЕКТ ПРОИЗВОДСТВА РАБОТ</div>
                               <div className="text-[20pt] font-black uppercase tracking-tight px-4 leading-none">{project.projectName || '[НАЗВАНИЕ ПРОЕКТА]'}</div>
                               
                               <div className="space-y-6 pt-10 text-[14pt]">
-                                 <div className="font-bold border-t-2 border-black pt-6 uppercase">Объект: {project.objectName || '[ОБЪЕКТ]'}</div>
+                                 <div className="font-bold pt-6 uppercase">Объект: {project.objectName || '[ОБЪЕКТ]'}</div>
                                  <div className="italic">Разработано на основании РД: {project.workingDocCode || '[ШИФР]'}</div>
                               </div>
                            </div>
@@ -907,8 +1093,7 @@ export default function App() {
                     );
                   }
                   
-                  // DETERMINE STAMP TYPE
-                  // Page 2 (TOC) uses Form 5 (Large), others use Form 6 (Small)
+                  // Logic for stamp type
                   const isToc = page.type === 'toc';
                   const stampType = isToc ? 'form5' : 'form6';
 
@@ -932,6 +1117,73 @@ export default function App() {
                       </div>
                     );
                   }
+                  
+                  if (page.type === 'approval-sheet') {
+                    return (
+                      <div key={idx} className="page-container font-times">
+                        <div className="gost-frame"></div>
+                        <div className="gost-content content-with-form-6">
+                            <h3 className="text-[16pt] font-black text-center mb-6 border-b-2 border-black pb-2 uppercase">Лист согласования</h3>
+                            <table className="w-full border-collapse border border-black text-[10pt]">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="border border-black p-2 w-[10mm]">№ п/п</th>
+                                        <th className="border border-black p-2">Наименование организации</th>
+                                        <th className="border border-black p-2 w-[40mm]">Должность, Ф.И.О.</th>
+                                        <th className="border border-black p-2 w-[25mm]">Дата</th>
+                                        <th className="border border-black p-2 w-[25mm]">Подпись</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {[...Array(15)].map((_, i) => (
+                                        <tr key={i} className="h-[12mm]">
+                                            <td className="border border-black p-1 text-center">{i + 1}</td>
+                                            <td className="border border-black p-1"></td>
+                                            <td className="border border-black p-1"></td>
+                                            <td className="border border-black p-1"></td>
+                                            <td className="border border-black p-1"></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <MainStamp pageNum={page.pageNum} type="form6" />
+                      </div>
+                    );
+                  }
+
+                  if (page.type === 'acquaintance-sheet') {
+                    return (
+                      <div key={idx} className="page-container font-times">
+                        <div className="gost-frame"></div>
+                        <div className="gost-content content-with-form-6">
+                            <h3 className="text-[16pt] font-black text-center mb-6 border-b-2 border-black pb-2 uppercase">Лист ознакомления</h3>
+                            <table className="w-full border-collapse border border-black text-[10pt]">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="border border-black p-2 w-[10mm]">№ п/п</th>
+                                        <th className="border border-black p-2">Должность, Ф.И.О.</th>
+                                        <th className="border border-black p-2 w-[30mm]">Дата</th>
+                                        <th className="border border-black p-2 w-[30mm]">Подпись</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {[...Array(15)].map((_, i) => (
+                                        <tr key={i} className="h-[12mm]">
+                                            <td className="border border-black p-1 text-center">{i + 1}</td>
+                                            <td className="border border-black p-1"></td>
+                                            <td className="border border-black p-1"></td>
+                                            <td className="border border-black p-1"></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <MainStamp pageNum={page.pageNum} type="form6" />
+                      </div>
+                    );
+                  }
+
                   if (page.type === 'tk-separator') {
                     return (
                       <div key={idx} className="page-container font-times">
@@ -984,7 +1236,7 @@ export default function App() {
            )}
         </section>
       </main>
-      
+      {/* ... (Footer same as previous) ... */}
       <footer className="no-print bg-slate-900 px-8 py-3 flex items-center justify-between text-[10px] font-black uppercase text-slate-500 border-t border-slate-800 font-sans">
          <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
@@ -998,7 +1250,7 @@ export default function App() {
     </div>
   );
 }
-
+// ... (Helper components same as previous) ...
 function SearchableInput({ label, value, onChange, suggestions, icon }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

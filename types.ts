@@ -56,6 +56,7 @@ export interface ProjectData {
   workDeadlines: Record<string, { start: string; end: string }>;
   workingDocName: string;
   workingDocCode: string;
+  posDoc?: WorkingDoc; // Added POS document
   roleDeveloper: string;
   roleClientChiefEngineer: string;
   roleAuthorSupervision: string;

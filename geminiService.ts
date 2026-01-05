@@ -101,6 +101,50 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
 }
 
 /**
+ * specifically analyzes POS (Project Organization of Construction)
+ */
+export async function extractPosData(fileData: string, mimeType: string): Promise<{ projectName?: string; objectName?: string; location?: string; mainWorks?: string[] } | null> {
+  if (!SUPPORTED_MIME_TYPES.includes(mimeType)) return null;
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const model = 'gemini-3-pro-preview';
+
+  try {
+    const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
+      model,
+      contents: [
+        {
+          parts: [
+            { inlineData: { data: fileData, mimeType } },
+            { text: "Ты эксперт ПТО. Проанализируй файл ПОС (Проект Организации Строительства). Извлеки: Название проекта, Адрес объекта, Наименование объекта строительства и список основных этапов/работ. Верни JSON." }
+          ]
+        }
+      ],
+      config: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 2000 },
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            projectName: { type: Type.STRING },
+            objectName: { type: Type.STRING },
+            location: { type: Type.STRING },
+            mainWorks: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["projectName", "objectName"]
+        }
+      }
+    }));
+
+    const text = response.text;
+    if (text) return JSON.parse(text);
+  } catch (e) {
+    console.error("POS Extraction error:", e);
+  }
+  return null;
+}
+
+/**
  * Specifically analyzes a bill of quantities (estimate) and matches it against the work catalog.
  */
 export async function extractWorksFromEstimate(
@@ -217,9 +261,12 @@ export async function generateSectionContent(
       ВИДЫ РАБОТ И СРОКИ:
       ${deadlinesList}
       
-      ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ НОРМАТИВНОЙ БАЗЫ:
-      К запросу приложены файлы из "Базы знаний" и текущая рабочая документация. 
-      ОБЯЗАТЕЛЬНО используй данные из этих файлов для наполнения раздела. 
+      ИСХОДНЫЕ ДАННЫЕ:
+      1. Если передан файл ПОС (Проект Организации Строительства) — это ОСНОВНОЙ ДОКУМЕНТ. Сроки, методы, техника — брать оттуда.
+      2. Рабочая документация (РД) — для детализации.
+      3. Приложены файлы из "Базы знаний" (ГОСТ, СП) — для ссылок на нормы.
+
+      ИНСТРУКЦИЯ ПО НАПОЛНЕНИЮ:
       Если это раздел "Техника безопасности", опирайся на СП и ГОСТ.
       Если это "Технология работ", детально распиши последовательность для: ${project.workType.join(', ')}.
 
@@ -229,6 +276,14 @@ export async function generateSectionContent(
     `;
 
   const parts: any[] = [{ text: promptText }];
+
+  // Добавляем ПОС в контекст
+  if (project.posDoc && SUPPORTED_MIME_TYPES.includes(project.posDoc.mimeType)) {
+    parts.push({ 
+        inlineData: { mimeType: project.posDoc.mimeType, data: project.posDoc.data } 
+    });
+    parts.push({ text: "ВНИМАНИЕ: Это файл ПОС. Используй его решения приоритетно." });
+  }
 
   // Фильтруем документы, оставляя только поддерживаемые типы, чтобы избежать ошибки 400
   if (project.workingDocs && project.workingDocs.length > 0) {
