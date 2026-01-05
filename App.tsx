@@ -161,114 +161,102 @@ const INITIAL_PROJECT: ProjectData = {
   aiWorksFromDocs: [],
 };
 
-// --- Advanced Pagination Engine (Queue Based) ---
-const splitContentIntoPages = (content: string, charsPerPage: number = 2500): string[] => {
+// --- Height Estimation Pagination Engine (GOST Compliant) ---
+// This replaces the old character-count based logic with a line-height estimator.
+const splitContentIntoPages = (content: string): string[] => {
   if (!content) return [""];
-  
+
+  // CONSTANTS TUNED FOR A4 + GOST FRAMES
+  // Available height approx 260mm. Line height ~5-6mm.
+  // We use a safe limit of ~46 lines to avoid hitting the stamp.
+  const MAX_LINES_PER_PAGE = 46; 
+  // Average characters per line for Times New Roman 12pt on A4 with margins (approx 180mm width)
+  const AVG_CHARS_PER_LINE = 85; 
+
   const pages: string[] = [];
-  // Используем очередь строк. Если строку нужно разбить, остаток возвращается в начало очереди.
-  const linesQueue = content.split('\n');
+  let currentPageLines: string[] = [];
+  let currentHeight = 0;
   
-  let currentPage = "";
-  let currentLen = 0;
+  // Table state tracking
+  let insideTable = false;
+  let tableHeader: string[] = [];
 
-  // Настройка "веса" элементов (в символах)
-  const COST_NEWLINE = 20; 
-  const COST_HEADER_BONUS = 150; // Заголовки занимают больше места
-  const COST_TABLE_ROW_BONUS = 50; // Таблицы требуют отступов
-  const COST_LIST_BONUS = 30; // Списки
-  const MIN_SPACE_TO_FILL = 150; // Минимальное место, которое стоит заполнять (иначе перенос)
+  const rawLines = content.split('\n');
 
-  while (linesQueue.length > 0) {
-    const line = linesQueue.shift()!; // Берем первую строку
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
     const trimmed = line.trim();
+
+    // --- 1. Calculate Visual Height of the current line ---
+    // Minimum 1 line height. If text is long, it wraps.
+    let visualLines = Math.max(1, Math.ceil(line.length / AVG_CHARS_PER_LINE));
+
+    // Heuristics for Markdown elements
+    if (trimmed.startsWith('#')) {
+       visualLines += 1; // Headers have margin
+    }
+    if (trimmed === '') {
+       visualLines = 1; // Empty line takes space
+    }
+    if (trimmed.startsWith('- ') || trimmed.match(/^\d+\./)) {
+       // Lists usually have a bit of spacing or wrapping
+    }
+
+    // --- 2. Handle Tables Logic ---
+    const isTableLine = trimmed.startsWith('|');
     
-    // Рассчитываем стоимость строки
-    let lineCost = line.length + COST_NEWLINE;
-    let isStructure = false;
-    
-    // Проверка на структурные элементы (их лучше не рвать)
-    if (trimmed.startsWith('#')) { lineCost += COST_HEADER_BONUS; isStructure = true; }
-    else if (trimmed.startsWith('|')) { lineCost += COST_TABLE_ROW_BONUS; isStructure = true; }
-    else if (trimmed.startsWith('- ') || trimmed.startsWith('* ') || trimmed.match(/^\d+\./)) { lineCost += COST_LIST_BONUS; isStructure = true; }
-
-    // 1. Если влезает целиком - добавляем
-    if (currentLen + lineCost <= charsPerPage) {
-       currentPage += (currentPage ? "\n" : "") + line;
-       currentLen += lineCost;
-       continue;
-    }
-
-    // 2. Не влезает. Считаем остаток места.
-    const spaceLeft = charsPerPage - currentLen;
-
-    // Если места совсем мало (меньше минимума), то нет смысла пытаться впихнуть кусок.
-    // Просто переносим на новую страницу.
-    if (spaceLeft < MIN_SPACE_TO_FILL) {
-       pages.push(currentPage);
-       currentPage = "";
-       currentLen = 0;
-       linesQueue.unshift(line); // Возвращаем строку в начало очереди для новой страницы
-       continue;
-    }
-
-    // Если это заголовок или таблица - их рвать нельзя.
-    // Если они не влезают, переносим на новую страницу.
-    if (isStructure) {
-       pages.push(currentPage);
-       currentPage = "";
-       currentLen = 0;
-       linesQueue.unshift(line);
-       continue;
-    }
-
-    // 3. Это обычный текст. Место есть. РВЕМ ЕГО!
-    // Находим пробел, ближайший к концу доступного места.
-    // Отступаем немного назад (например, на 10-20 символов) для страховки.
-    const safeLimit = Math.max(0, spaceLeft - 10);
-    let splitIdx = line.lastIndexOf(' ', safeLimit);
-
-    // Если пробел не найден (одно длинное слово) или кусок получается слишком маленьким (висячая строка)
-    if (splitIdx === -1 || splitIdx < 50) {
-       // Если строка сама по себе огромная (больше страницы), нам придется её резать всё равно.
-       // Но если она просто длинная, но меньше страницы, лучше перенести целиком.
-       if (lineCost > charsPerPage) {
-           // Принудительная резка по лимиту, если это монструозная строка
-           splitIdx = safeLimit; 
-       } else {
-           // Перенос
-           pages.push(currentPage);
-           currentPage = "";
-           currentLen = 0;
-           linesQueue.unshift(line);
-           continue;
+    if (isTableLine) {
+       if (!insideTable) {
+           insideTable = true;
+           // Attempt to capture table header (usually first 2 lines of a table block)
+           if (i + 1 < rawLines.length && rawLines[i+1].trim().startsWith('|') && rawLines[i+1].includes('---')) {
+               tableHeader = [line, rawLines[i+1]];
+           } else {
+               // Fallback if table doesn't have standard markdown separator immediately
+               tableHeader = [line]; 
+           }
        }
+    } else {
+       if (trimmed !== '') {
+           insideTable = false;
+           tableHeader = [];
+       }
+       // If empty string, we might still be "visually" near a table, but strictly markdown breaks table on newline.
+       // We'll reset table state on non-table text lines.
     }
 
-    // Режем
-    const part1 = line.substring(0, splitIdx);
-    const part2 = line.substring(splitIdx).trim(); // Убираем пробел в начале остатка
+    // --- 3. Check for Overflow ---
+    if (currentHeight + visualLines > MAX_LINES_PER_PAGE) {
+        // --- PAGE BREAK ---
+        pages.push(currentPageLines.join('\n'));
+        currentPageLines = [];
+        currentHeight = 0;
 
-    // Добавляем первую часть и закрываем страницу
-    currentPage += (currentPage ? "\n" : "") + part1;
-    pages.push(currentPage);
-    
-    // Сброс для новой страницы
-    currentPage = "";
-    currentLen = 0;
-
-    // Возвращаем остаток в очередь (он пойдет на новую страницу, и может быть снова разбит, если он огромный)
-    if (part2.length > 0) {
-        linesQueue.unshift(part2);
+        // If we split inside a table, we MUST repeat the header on the new page
+        // so that Markdown renders a valid table again.
+        if (insideTable && tableHeader.length > 0) {
+            // Check if we are currently processing the header itself. 
+            // If so, just push it. If we are deep in body, push header first.
+            const isHeaderLine = tableHeader.includes(line);
+            
+            if (!isHeaderLine) {
+                currentPageLines.push(...tableHeader);
+                currentHeight += 2; // Header usually takes 2 visual lines space
+            }
+        }
     }
+
+    // Add line to current page
+    currentPageLines.push(line);
+    currentHeight += visualLines;
   }
 
-  // Добавляем последний хвост
-  if (currentPage) {
-    pages.push(currentPage);
+  // Flush last page
+  if (currentPageLines.length > 0) {
+    pages.push(currentPageLines.join('\n'));
   }
 
-  return pages.length > 0 ? pages : [""];
+  return pages;
 };
 
 export default function App() {
@@ -1250,6 +1238,7 @@ export default function App() {
     </div>
   );
 }
+
 // ... (Helper components same as previous) ...
 function SearchableInput({ label, value, onChange, suggestions, icon }: any) {
   const [isOpen, setIsOpen] = useState(false);
