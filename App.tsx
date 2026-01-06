@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -60,7 +59,8 @@ import {
   ExternalLink,
   CreditCard,
   Square,
-  Map
+  Map,
+  CheckSquare
 } from 'lucide-react';
 import { ProjectData, DocumentType, DocSection, WorkingDoc, SavedProject, ConstructionObject, ClientEntry, ContractorEntry, ReferenceFile } from './types';
 import { generateSectionContent, extractDocInfo, extractWorksFromEstimate, extractPosData } from './geminiService';
@@ -150,7 +150,7 @@ const INITIAL_PROJECT: ProjectData = {
   workType: [],
   workDeadlines: {},
   workingDocName: '',
-  workingDocCode: 'РД ППР', // Set default cipher
+  workingDocCode: '', // Default empty as requested
   roleDeveloper: '',
   roleClientChiefEngineer: '',
   roleAuthorSupervision: '',
@@ -345,7 +345,6 @@ export default function App() {
     if (dicts) try { setDictionaries(prev => ({ ...prev, ...JSON.parse(dicts) })); } catch (e) {}
   }, []);
 
-  // ... (Notification and Update functions remain the same) ...
   const showNotification = (message: string, type: 'success' | 'error' | 'info') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 5000);
@@ -369,6 +368,7 @@ export default function App() {
       }
 
       if (field === 'workType') {
+        // Critical Fix: Ensure TK Map is synced with new work list
         const newTkMap: Record<string, DocSection[]> = {};
         (value as string[]).forEach(wt => {
           newTkMap[wt] = prev.tkMap[wt] || TK_SECTIONS_TEMPLATE.map(s => ({ ...s }));
@@ -398,7 +398,6 @@ export default function App() {
     }));
   };
 
-  // ... (Upload handlers remain the same) ...
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -423,13 +422,32 @@ export default function App() {
       if (newDocs.length > 0) {
         const info = await extractDocInfo(newDocs[0].data, newDocs[0].mimeType);
         if (info) {
-           setProject(p => ({ 
-             ...p, 
-             workingDocCode: info.code || p.workingDocCode, 
-             workingDocName: info.name || p.workingDocName,
-             workType: Array.from(new Set([...p.workType, ...(info.workTypes || [])]))
-           }));
-           showNotification(`AI распознал: ${info.code}`, 'success');
+           // Update basic project info and sync works
+           setProject(p => {
+             const newWorks = Array.from(new Set([...p.workType, ...(info.workTypes || [])]));
+             // Sync TK Map: Ensure we create sections for new works
+             const newTkMap = { ...p.tkMap };
+             newWorks.forEach(w => {
+                if (!newTkMap[w]) {
+                    newTkMap[w] = TK_SECTIONS_TEMPLATE.map(s => ({ ...s }));
+                }
+             });
+
+             return { 
+               ...p, 
+               workingDocCode: info.code || p.workingDocCode, 
+               workingDocName: info.name || p.workingDocName,
+               // Direct add works to main list
+               workType: newWorks,
+               tkMap: newTkMap
+             };
+           });
+
+           if (info.workTypes && info.workTypes.length > 0) {
+             showNotification(`AI добавил ${info.workTypes.length} работ из документа. Проверьте список и удалите лишнее.`, 'success');
+           } else {
+             showNotification(`AI распознал документ: ${info.code}, но не нашел явных работ.`, 'info');
+           }
         }
       }
     } catch (e) { 
@@ -453,10 +471,21 @@ export default function App() {
       });
       const works = await extractWorksFromEstimate(base64, file.type, dictionaries.workCatalog);
       if (works && works.length > 0) {
-        setProject(p => ({
-          ...p,
-          workType: Array.from(new Set([...p.workType, ...works]))
-        }));
+        setProject(p => {
+          const newWorks = Array.from(new Set([...p.workType, ...works]));
+          // Sync TK Map
+          const newTkMap = { ...p.tkMap };
+          newWorks.forEach(w => {
+             if (!newTkMap[w]) {
+                 newTkMap[w] = TK_SECTIONS_TEMPLATE.map(s => ({ ...s }));
+             }
+          });
+          return {
+            ...p,
+            workType: newWorks,
+            tkMap: newTkMap
+          };
+        });
         showNotification(`Найдено работ в смете: ${works.length}`, 'success');
       } else {
         showNotification("Работ в смете не обнаружено или формат не поддерживается", "info");
@@ -490,12 +519,29 @@ export default function App() {
               if (posData.projectName) next.projectName = posData.projectName;
               if (posData.objectName) next.objectName = posData.objectName;
               if (posData.location) next.location = posData.location;
+              
+              // Direct add works
               if (posData.mainWorks && posData.mainWorks.length > 0) {
-                  next.workType = Array.from(new Set([...prev.workType, ...posData.mainWorks]));
+                 const newWorks = Array.from(new Set([...prev.workType, ...posData.mainWorks]));
+                 next.workType = newWorks;
+                 
+                 // Sync TK Map
+                 const newTkMap = { ...prev.tkMap };
+                 newWorks.forEach(w => {
+                    if (!newTkMap[w]) {
+                        newTkMap[w] = TK_SECTIONS_TEMPLATE.map(s => ({ ...s }));
+                    }
+                 });
+                 next.tkMap = newTkMap;
               }
               return next;
           });
-          showNotification('ПОС успешно проанализирован. Данные обновлены.', 'success');
+          
+           if (posData.mainWorks && posData.mainWorks.length > 0) {
+                showNotification(`Добавлено ${posData.mainWorks.length} работ из ПОС. Проверьте список.`, 'success');
+           } else {
+                showNotification('ПОС успешно проанализирован. Данные обновлены.', 'success');
+           }
       } else {
           showNotification('ПОС загружен, но данные извлечь не удалось. Он будет использован при генерации.', 'info');
       }
@@ -642,6 +688,9 @@ export default function App() {
   };
 
   const MainStamp = ({ pageNum, type = 'form6' }: { pageNum: number, type?: 'form5' | 'form6' }) => {
+    // Generate the concatenated code for the stamp (ППР + code)
+    const docCipher = project.workingDocCode ? `ППР-${project.workingDocCode}` : 'ППР-ШИФР';
+
     if (type === 'form5') {
         return (
             <div className="main-stamp stamp-form-5 font-times">
@@ -658,7 +707,7 @@ export default function App() {
                                 </div>
                             </td>
                             <td colSpan={2} className="text-center align-middle">
-                                <div className="text-[7pt] font-bold uppercase leading-tight">{project.workingDocCode || 'ШИФР'}</div>
+                                <div className="text-[7pt] font-bold uppercase leading-tight">{docCipher}</div>
                             </td>
                         </tr>
                         <tr style={{ height: '10mm' }}>
@@ -710,13 +759,13 @@ export default function App() {
                                 <div className="w-[10mm] border-r border-black flex items-center justify-center">Изм.</div>
                                 <div className="w-[10mm] border-r border-black flex items-center justify-center">Кол.уч</div>
                                 <div className="w-[10mm] border-r border-black flex items-center justify-center">Лист</div>
-                                <div className="w-[20mm] border-r border-black flex items-center justify-center">№док</div>
+                                <div className="w-[10mm] border-r border-black flex items-center justify-center">№док</div>
                                 <div className="w-[20mm] border-r border-black flex items-center justify-center">Подп.</div>
                                 <div className="w-[20mm] flex items-center justify-center">Дата</div>
                             </div>
                         </td>
                         <td className="border-r border-black text-center align-middle font-bold text-[8pt]">
-                           {project.workingDocCode || 'ШИФР'}
+                           {docCipher}
                         </td>
                         <td style={{ width: '20mm' }} className="text-center align-middle p-0">
                              <div className="flex flex-col h-full">
@@ -769,8 +818,8 @@ export default function App() {
                       <SearchableInput label="Объект" value={project.objectName} onChange={(v: string) => updateProject('objectName', v)} suggestions={dictionaries.objects.map(o => o.name)} icon={<Database className="w-4" />} />
                       <SearchableInput label="Адрес объекта" value={project.location} onChange={(v: string) => updateProject('location', v)} suggestions={[]} icon={<MapPin className="w-4" />} />
                       <SearchableInput label="Заказчик" value={project.client} onChange={(v: string) => updateProject('client', v)} suggestions={dictionaries.clients.map(c => c.name)} icon={<UserCog className="w-4" />} />
-                      <SearchableInput label="Шифр РД" value={project.workingDocCode} onChange={(v: string) => updateProject('workingDocCode', v)} suggestions={[]} icon={<FileDown className="w-4" />} />
                       <SearchableInput label="Подрядчик" value={project.contractor} onChange={(v: string) => updateProject('contractor', v)} suggestions={dictionaries.contractors.map(c => c.name)} icon={<Building2 className="w-4" />} />
+                      <SearchableInput label="Шифр РД" value={project.workingDocCode} onChange={(v: string) => updateProject('workingDocCode', v)} suggestions={[]} icon={<FileDown className="w-4" />} />
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
