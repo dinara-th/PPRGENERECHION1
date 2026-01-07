@@ -57,6 +57,7 @@ export interface ProjectData {
   workingDocName: string;
   workingDocCode: string;
   posDoc?: WorkingDoc; // Added POS document
+  estimateDoc?: WorkingDoc; // Added Estimate document
   roleDeveloper: string;
   roleClientChiefEngineer: string;
   roleAuthorSupervision: string;

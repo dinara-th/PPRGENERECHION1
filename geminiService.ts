@@ -1,6 +1,5 @@
-
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { ProjectData, DocumentType, ReferenceFile } from "./types";
+import { ProjectData, DocumentType, ReferenceFile, WorkingDoc } from "./types";
 
 // Список типов MIME, которые официально поддерживаются Gemini API для inlineData
 const SUPPORTED_MIME_TYPES = [
@@ -15,7 +14,7 @@ const SUPPORTED_MIME_TYPES = [
 /**
  * Helper function to retry operations with exponential backoff
  */
-async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 3, baseDelay: number = 15000): Promise<T> {
+async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 6, baseDelay: number = 20000): Promise<T> {
   let lastError: any;
   
   for (let i = 0; i < maxRetries; i++) {
@@ -36,7 +35,11 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
         errString.includes('"code":429');
 
       if (isQuotaError && i < maxRetries - 1) {
-        const delay = baseDelay * Math.pow(2, i) + (Math.random() * 2000);
+        // Increased delay strategy: Base delay * (attempt number)
+        // Attempt 1: 20s
+        // Attempt 2: 40s
+        // Attempt 3: 60s
+        const delay = baseDelay * (i + 1) + (Math.random() * 5000);
         console.warn(`Quota exceeded. Retrying in ${Math.round(delay/1000)}s... (Attempt ${i + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
@@ -50,9 +53,9 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
 }
 
 /**
- * Extracts document information (name, code, and types of work) from a PDF or image.
+ * Extracts document information (name, code, project details and types of work) from a PDF or image.
  */
-export async function extractDocInfo(fileData: string, mimeType: string): Promise<{ name: string; code: string; workTypes: string[] } | null> {
+export async function extractDocInfo(fileData: string, mimeType: string): Promise<{ name: string; code: string; workTypes: string[]; projectName?: string; objectName?: string; location?: string; client?: string; contractor?: string } | null> {
   if (!SUPPORTED_MIME_TYPES.includes(mimeType)) {
     console.warn(`Тип файла ${mimeType} не поддерживается для прямого анализа AI. Пропускаю...`);
     return null;
@@ -68,7 +71,7 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
         {
           parts: [
             { inlineData: { data: fileData, mimeType } },
-            { text: "Проанализируй этот строительный документ (чертеж или пояснительную записку). Найди полное наименование документации, её шифр (марку) и перечень основных видов работ. Верни ответ строго в формате JSON: {\"name\": \"...\", \"code\": \"...\", \"workTypes\": [\"...\", \"...\"]}." }
+            { text: "Проанализируй этот строительный документ (чертеж или РД). Извлеки: 1. Шифр документа. 2. Полное название документа. 3. Название проекта. 4. Название объекта строительства. 5. Адрес объекта. 6. Заказчик (организация). 7. Подрядчик/Генподрядчик (организация). 8. Перечень основных видов работ. Верни JSON." }
           ]
         }
       ],
@@ -78,8 +81,13 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            name: { type: Type.STRING },
-            code: { type: Type.STRING },
+            name: { type: Type.STRING, description: "Название самого документа (листа)" },
+            code: { type: Type.STRING, description: "Шифр (марка) чертежа" },
+            projectName: { type: Type.STRING, description: "Общее название проекта" },
+            objectName: { type: Type.STRING, description: "Наименование объекта строительства" },
+            location: { type: Type.STRING, description: "Адрес объекта" },
+            client: { type: Type.STRING, description: "Наименование Заказчика" },
+            contractor: { type: Type.STRING, description: "Наименование Подрядчика" },
             workTypes: { 
               type: Type.ARRAY,
               items: { type: Type.STRING }
@@ -102,8 +110,9 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
 
 /**
  * specifically analyzes POS (Project Organization of Construction)
+ * NOTE: Per request, POS is NOT used for work selection, only metadata.
  */
-export async function extractPosData(fileData: string, mimeType: string): Promise<{ projectName?: string; objectName?: string; location?: string; mainWorks?: string[] } | null> {
+export async function extractPosData(fileData: string, mimeType: string): Promise<{ projectName?: string; objectName?: string; location?: string } | null> {
   if (!SUPPORTED_MIME_TYPES.includes(mimeType)) return null;
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -116,7 +125,7 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
         {
           parts: [
             { inlineData: { data: fileData, mimeType } },
-            { text: "Ты эксперт ПТО. Проанализируй файл ПОС (Проект Организации Строительства). Извлеки: Название проекта, Адрес объекта, Наименование объекта строительства и список основных этапов/работ. Верни JSON." }
+            { text: "Ты эксперт ПТО. Проанализируй файл ПОС (Проект Организации Строительства). Извлеки только общие данные: Название проекта, Адрес объекта, Наименование объекта строительства. Список работ извлекать НЕ НУЖНО. Верни JSON." }
           ]
         }
       ],
@@ -128,8 +137,7 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
           properties: {
             projectName: { type: Type.STRING },
             objectName: { type: Type.STRING },
-            location: { type: Type.STRING },
-            mainWorks: { type: Type.ARRAY, items: { type: Type.STRING } }
+            location: { type: Type.STRING }
           },
           required: ["projectName", "objectName"]
         }
@@ -146,12 +154,13 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
 
 /**
  * Specifically analyzes a bill of quantities (estimate) and matches it against the work catalog.
+ * Also extracts project metadata including Client and Contractor.
  */
 export async function extractWorksFromEstimate(
   fileData: string, 
   mimeType: string, 
   catalog: any
-): Promise<string[]> {
+): Promise<{ selectedWorks: string[]; projectName?: string; objectName?: string; location?: string; client?: string; contractor?: string } | null> {
   // Если это Excel (XLSX), API Gemini его не примет как inlineData. 
   // В данной версии мы ограничиваем анализ только PDF-сметами.
   if (!SUPPORTED_MIME_TYPES.includes(mimeType)) {
@@ -178,7 +187,15 @@ export async function extractWorksFromEstimate(
         {
           parts: [
             { inlineData: { data: fileData, mimeType } },
-            { text: `Ты инженер-сметчик. Проанализируй сметную ведомость. Сопоставь позиции сметы с нашим каталогом видов работ. Выбери только те названия из каталога, которые реально присутствуют в смете.\n\nКАТАЛОГ:\n${allAvailableWorks.join('\n')}\n\nВерни результат в формате JSON: {"selectedWorks": ["..."]}.` }
+            { text: `Ты инженер-сметчик. Проанализируй сметную ведомость. 
+            1. Найди Название стройки (проекта), Объект и Адрес (если есть).
+            2. Найди наименование Заказчика и Подрядчика в шапке документа.
+            3. Сопоставь позиции сметы с нашим каталогом видов работ. Выбери только те названия из каталога, которые реально присутствуют в смете.
+            
+            КАТАЛОГ:
+            ${allAvailableWorks.join('\n')}
+            
+            Верни результат в формате JSON.` }
           ]
         }
       ],
@@ -188,6 +205,11 @@ export async function extractWorksFromEstimate(
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            projectName: { type: Type.STRING },
+            objectName: { type: Type.STRING },
+            location: { type: Type.STRING },
+            client: { type: Type.STRING, description: "Наименование Заказчика" },
+            contractor: { type: Type.STRING, description: "Наименование Подрядчика" },
             selectedWorks: { 
               type: Type.ARRAY,
               items: { type: Type.STRING }
@@ -200,14 +222,98 @@ export async function extractWorksFromEstimate(
     
     const text = response.text;
     if (text) {
-      const parsed = JSON.parse(text);
-      return parsed.selectedWorks || [];
+      return JSON.parse(text);
     }
   } catch (e) {
     console.error("Estimate extraction error:", e);
     throw e;
   }
-  return [];
+  return null;
+}
+
+/**
+ * Validates consistency between uploaded documents.
+ */
+export async function validateProjectDocs(
+  rdDoc: WorkingDoc | undefined,
+  estimateDoc: WorkingDoc | undefined,
+  posDoc: WorkingDoc | undefined
+): Promise<{ issues: string[], isConsistent: boolean }> {
+  
+  if (!rdDoc && !estimateDoc && !posDoc) {
+     return { issues: ["Нет загруженных документов для проверки."], isConsistent: false };
+  }
+
+  const parts: any[] = [];
+  let docCount = 0;
+
+  if (rdDoc && SUPPORTED_MIME_TYPES.includes(rdDoc.mimeType)) {
+    parts.push({ inlineData: { mimeType: rdDoc.mimeType, data: rdDoc.data } });
+    parts.push({ text: `Документ 1: РД (${rdDoc.name})` });
+    docCount++;
+  }
+  if (estimateDoc && SUPPORTED_MIME_TYPES.includes(estimateDoc.mimeType)) {
+    parts.push({ inlineData: { mimeType: estimateDoc.mimeType, data: estimateDoc.data } });
+    parts.push({ text: `Документ 2: Смета (${estimateDoc.name})` });
+    docCount++;
+  }
+  if (posDoc && SUPPORTED_MIME_TYPES.includes(posDoc.mimeType)) {
+    parts.push({ inlineData: { mimeType: posDoc.mimeType, data: posDoc.data } });
+    parts.push({ text: `Документ 3: ПОС (${posDoc.name})` });
+    docCount++;
+  }
+
+  parts.push({ text: `
+    Ты эксперт по анализу строительной документации.
+    Твоя задача: Провести перекрестную проверку загруженных документов на непротиворечивость исходных данных.
+    
+    Проверь следующие параметры между документами:
+    1. Название проекта / Стройки.
+    2. Наименование объекта (корпус, здание).
+    3. Адрес строительства.
+    4. Заказчик.
+    5. Подрядчик.
+    
+    Если документы относятся к разным проектам или содержат противоречивую информацию (например, разный адрес или разные заказчики), сообщи об этом как о проблеме.
+    Если какой-то документ кажется нерелевантным (другой год, другой город), отметь это.
+    Также укажи, если какие-то обязательные поля (Заказчик, Подрядчик) отсутствуют во всех документах.
+    
+    Верни результат в формате JSON:
+    {
+      "isConsistent": boolean, // true если критических противоречий нет
+      "issues": string[] // список найденных несоответствий, предупреждений или ошибок на русском языке
+    }
+  `});
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const model = 'gemini-3-pro-preview';
+
+  try {
+    const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
+      model,
+      contents: [{ parts }],
+      config: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 2000 },
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+                isConsistent: { type: Type.BOOLEAN },
+                issues: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["isConsistent", "issues"]
+        }
+      }
+    }));
+
+    const text = response.text;
+    if (text) return JSON.parse(text);
+  } catch (e) {
+    console.error("Validation error:", e);
+    return { issues: ["Ошибка при анализе документов. Проверьте лимиты API."], isConsistent: false };
+  }
+  
+  return { issues: [], isConsistent: true };
 }
 
 /**
@@ -258,6 +364,7 @@ export async function generateSectionContent(
       ДАННЫЕ ПРОЕКТА:
       ПРОЕКТ: ${project.projectName} | ОБЪЕКТ: ${project.objectName}
       АДРЕС: ${project.location}
+      ЗАКАЗЧИК: ${project.client} | ПОДРЯДЧИК: ${project.contractor}
       ВИДЫ РАБОТ И СРОКИ:
       ${deadlinesList}
       
@@ -311,7 +418,7 @@ export async function generateSectionContent(
       temperature: 0.1,
       topP: 0.95,
       // Reduced thinking budget to save tokens and avoid TPM limits
-      thinkingConfig: { thinkingBudget: 4096 }
+      thinkingConfig: { thinkingBudget: 2048 }
     },
   }));
 
