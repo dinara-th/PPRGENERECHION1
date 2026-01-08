@@ -13,8 +13,9 @@ const SUPPORTED_MIME_TYPES = [
 
 /**
  * Helper function to retry operations with exponential backoff
+ * Updated to handle 500/RPC errors gracefully and 429 Quota errors aggressively
  */
-async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 6, baseDelay: number = 20000): Promise<T> {
+async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 5, baseDelay: number = 5000): Promise<T> {
   let lastError: any;
   
   for (let i = 0; i < maxRetries; i++) {
@@ -23,29 +24,63 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
     } catch (error: any) {
       lastError = error;
       
-      // Detailed check for rate limit or quota error
       const errString = JSON.stringify(error);
+      const errMsg = error?.message || errString;
+
+      // 1. Check for Region/Permission errors (Non-retryable usually, but we throw clear error)
+      const isRegionError = 
+        error?.status === 403 || 
+        error?.code === 403 ||
+        errMsg.includes('403') ||
+        errMsg.includes('PERMISSION_DENIED') ||
+        errMsg.includes('Region not supported') ||
+        errMsg.includes('User location is not supported');
+
+      if (isRegionError) {
+        throw new Error("API Gemini недоступно в вашем текущем регионе (Ошибка 403). Пожалуйста, включите VPN (США/Европа) или смените регион.");
+      }
+
+      // 2. Check for Rate Limit / Quota errors
       const isQuotaError = 
         error?.code === 429 || 
         error?.status === 429 || 
-        error?.error?.code === 429 ||
-        error?.status === 'RESOURCE_EXHAUSTED' || 
-        (error?.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('RESOURCE_EXHAUSTED'))) ||
-        errString.includes('RESOURCE_EXHAUSTED') ||
-        errString.includes('"code":429');
+        error?.status === 'RESOURCE_EXHAUSTED' ||
+        errMsg.includes('429') ||
+        errMsg.includes('quota') ||
+        errMsg.includes('RESOURCE_EXHAUSTED');
 
-      if (isQuotaError && i < maxRetries - 1) {
-        // Increased delay strategy: Base delay * (attempt number)
-        // Attempt 1: 20s
-        // Attempt 2: 40s
-        // Attempt 3: 60s
-        const delay = baseDelay * (i + 1) + (Math.random() * 5000);
-        console.warn(`Quota exceeded. Retrying in ${Math.round(delay/1000)}s... (Attempt ${i + 1}/${maxRetries})`);
+      // 3. Check for Network / Server errors (Transient)
+      const isServerError = 
+        error?.code === 500 ||
+        error?.status === 500 ||
+        error?.status === 'UNKNOWN' ||
+        error?.status === 'INTERNAL' ||
+        errMsg.includes('500') ||
+        errMsg.includes('UNKNOWN') ||
+        errMsg.includes('Rpc failed') ||
+        errMsg.includes('xhr error') ||
+        errMsg.includes('fetch failed') ||
+        errMsg.includes('overloaded');
+
+      if ((isQuotaError || isServerError) && i < maxRetries - 1) {
+        // Calculate delay with exponential backoff for quotas
+        let delay = baseDelay;
+        
+        if (isQuotaError) {
+             // Exponential: 5s, 10s, 20s, 40s... to clear RPM limits
+             delay = baseDelay * Math.pow(2, i) + (Math.random() * 2000);
+        } else {
+             // Linear/Faster for server glitches
+             delay = 2000 * (i + 1) + (Math.random() * 1000);
+        }
+
+        console.warn(`Attempt ${i + 1} failed (${isQuotaError ? 'Quota 429' : 'Server Error'}). Retrying in ${Math.round(delay/1000)}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       
-      throw error; // If not a quota error or retries exhausted, throw immediately
+      // If error is not retryable or retries exhausted, throw it
+      throw error;
     }
   }
   
@@ -96,14 +131,16 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
           required: ["name", "code", "workTypes"]
         }
       }
-    }));
+    }), 5, 8000); // 5 retries, start with 8s delay
     
     const text = response.text;
     if (text) {
       return JSON.parse(text);
     }
-  } catch (e) {
+  } catch (e: any) {
     console.error("Extraction error:", e);
+    // Rethrow known errors so UI can handle them
+    if (e.message.includes("429") || e.message.includes("403") || e.message.includes("VPN")) throw e;
   }
   return null;
 }
@@ -142,12 +179,13 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
           required: ["projectName", "objectName"]
         }
       }
-    }));
+    }), 5, 8000);
 
     const text = response.text;
     if (text) return JSON.parse(text);
-  } catch (e) {
+  } catch (e: any) {
     console.error("POS Extraction error:", e);
+    if (e.message.includes("429") || e.message.includes("403") || e.message.includes("VPN")) throw e;
   }
   return null;
 }
@@ -161,8 +199,6 @@ export async function extractWorksFromEstimate(
   mimeType: string, 
   catalog: any
 ): Promise<{ selectedWorks: string[]; projectName?: string; objectName?: string; location?: string; client?: string; contractor?: string } | null> {
-  // Если это Excel (XLSX), API Gemini его не примет как inlineData. 
-  // В данной версии мы ограничиваем анализ только PDF-сметами.
   if (!SUPPORTED_MIME_TYPES.includes(mimeType)) {
     throw new Error(`Тип файла ${mimeType} не поддерживается для AI-анализа. Пожалуйста, используйте PDF версию сметы.`);
   }
@@ -218,7 +254,7 @@ export async function extractWorksFromEstimate(
           required: ["selectedWorks"]
         }
       }
-    }));
+    }), 5, 8000);
     
     const text = response.text;
     if (text) {
@@ -304,13 +340,20 @@ export async function validateProjectDocs(
             required: ["isConsistent", "issues"]
         }
       }
-    }));
+    }), 3, 10000);
 
     const text = response.text;
     if (text) return JSON.parse(text);
-  } catch (e) {
+  } catch (e: any) {
     console.error("Validation error:", e);
-    return { issues: ["Ошибка при анализе документов. Проверьте лимиты API."], isConsistent: false };
+    // Return specific error message in issues so UI displays it
+    if (e.message.includes("VPN") || e.message.includes("403")) {
+         return { issues: ["Ошибка проверки: API недоступно в регионе (403). Включите VPN."], isConsistent: false };
+    }
+    if (e.message.includes("429")) {
+         return { issues: ["Ошибка проверки: Превышен лимит квоты (429). Повторите позже."], isConsistent: false };
+    }
+    return { issues: ["Ошибка при анализе документов. Сбой сети или API."], isConsistent: false };
   }
   
   return { issues: [], isConsistent: true };
@@ -409,8 +452,7 @@ export async function generateSectionContent(
       });
   }
 
-  // We rely on retryOperation to handle transient errors.
-  // If it fails after retries, we let the error bubble up so the UI can handle the 'error' state properly.
+  // Use higher maxRetries for generation as it's critical
   const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
     model,
     contents: { parts },
@@ -420,7 +462,7 @@ export async function generateSectionContent(
       // Reduced thinking budget to save tokens and avoid TPM limits
       thinkingConfig: { thinkingBudget: 2048 }
     },
-  }));
+  }), 5, 8000);
 
-  return response.text || "Ошибка: модель вернула пустой ответ.";
+  return response.text || "Ошибка: модель вернула пустой ответ. Попробуйте сгенерировать раздел повторно.";
 }

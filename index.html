@@ -46,19 +46,57 @@
                 size: A4 portrait;
                 margin: 0;
             }
-            body {
-                background: white;
-            }
-            .no-print { display: none !important; }
-            .document-preview-container {
-                padding: 0 !important;
-                background: none !important;
+            
+            /* Reset root containers to ensure full visibility */
+            html, body, #root, main {
+                height: auto !important;
+                min-height: auto !important;
+                width: 100% !important;
+                overflow: visible !important;
+                background: white !important;
+                position: static !important;
                 display: block !important;
             }
+
+            /* Overwrite Tailwind overflow classes to ensure content isn't clipped */
+            .overflow-hidden, .overflow-y-auto, .overflow-x-hidden, .h-screen {
+                overflow: visible !important;
+                height: auto !important;
+            }
+
+            /* Hide everything by default */
+            .no-print, header, aside, footer {
+                display: none !important;
+            }
+            
+            .flex, .flex-col, .flex-1 {
+                display: block !important;
+                flex: none !important;
+            }
+
+            /* Target the specific content area for printing */
+            #print-content {
+                display: block !important;
+                height: auto !important;
+                overflow: visible !important;
+                position: static !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                background: white !important;
+            }
+
+            /* Ensure pages break correctly */
             .page-container {
                 box-shadow: none !important;
                 margin: 0 !important;
                 page-break-after: always;
+                page-break-inside: avoid;
+                break-after: page;
+            }
+            
+            /* Remove gap between pages in print flow */
+            .gap-10 {
+                gap: 0 !important;
             }
         }
 
