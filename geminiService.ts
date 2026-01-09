@@ -12,6 +12,15 @@ const SUPPORTED_MIME_TYPES = [
 ];
 
 /**
+ * Helper to clean Markdown code blocks from JSON string
+ */
+function cleanJsonString(text: string): string {
+  if (!text) return "";
+  // Remove ```json ... ``` or ``` ... ``` wrappers
+  return text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+}
+
+/**
  * Helper function to retry operations with exponential backoff
  * Updated to handle 500/RPC errors gracefully and 429 Quota errors aggressively
  */
@@ -135,7 +144,7 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
     
     const text = response.text;
     if (text) {
-      return JSON.parse(text);
+      return JSON.parse(cleanJsonString(text));
     }
   } catch (e: any) {
     console.error("Extraction error:", e);
@@ -182,7 +191,7 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
     }), 5, 8000);
 
     const text = response.text;
-    if (text) return JSON.parse(text);
+    if (text) return JSON.parse(cleanJsonString(text));
   } catch (e: any) {
     console.error("POS Extraction error:", e);
     if (e.message.includes("429") || e.message.includes("403") || e.message.includes("VPN")) throw e;
@@ -258,7 +267,7 @@ export async function extractWorksFromEstimate(
     
     const text = response.text;
     if (text) {
-      return JSON.parse(text);
+      return JSON.parse(cleanJsonString(text));
     }
   } catch (e) {
     console.error("Estimate extraction error:", e);
@@ -343,7 +352,7 @@ export async function validateProjectDocs(
     }), 3, 10000);
 
     const text = response.text;
-    if (text) return JSON.parse(text);
+    if (text) return JSON.parse(cleanJsonString(text));
   } catch (e: any) {
     console.error("Validation error:", e);
     // Return specific error message in issues so UI displays it
@@ -360,7 +369,7 @@ export async function validateProjectDocs(
 }
 
 /**
- * Generates professional construction document section content with support for reference knowledge base.
+ * Generates professional construction document section content with support for reference knowledge base and Google Search.
  */
 export async function generateSectionContent(
   project: ProjectData,
@@ -381,7 +390,20 @@ export async function generateSectionContent(
   }).join('\n');
 
   let specificInstruction = "";
+  let gesnPromptInstruction = "";
   
+  // Logic for GESN database usage
+  if (project.gesnDocs && project.gesnDocs.length > 0) {
+      gesnPromptInstruction = `
+      ВАЖНО: К проекту приложена БАЗА ДАННЫХ ГЭСН/ФЕР (в количестве ${project.gesnDocs.length} файл(ов)).
+      ПРИОРИТЕТНАЯ ЗАДАЧА:
+      1. Найди в этих файлах соответствующие расценки для видов работ: ${project.workType.join(', ')}.
+      2. Извлеки оттуда нормативную трудоемкость (чел-час) и состав машин/механизмов.
+      3. Используй эти ТОЧНЫЕ данные при формировании раздела ресурсов и технологии.
+      4. Укажи коды найденных расценок (например, ГЭСН 01-01-001-01).
+      `;
+  }
+
   // Specific Logic for Schedule Generation
   if (sectionTitle.toLowerCase().includes('график') || sectionTitle.toLowerCase().includes('schedule')) {
      specificInstruction = `
@@ -415,6 +437,9 @@ export async function generateSectionContent(
       1. Если передан файл ПОС (Проект Организации Строительства) — это ОСНОВНОЙ ДОКУМЕНТ. Сроки, методы, техника — брать оттуда.
       2. Рабочая документация (РД) — для детализации.
       3. Приложены файлы из "Базы знаний" (ГОСТ, СП) — для ссылок на нормы.
+      4. Используй Поиск Google для проверки актуальных версий СП/ГОСТ и технических характеристик оборудования (краны, экскаваторы), если они упоминаются.
+      
+      ${gesnPromptInstruction}
 
       ИНСТРУКЦИЯ ПО НАПОЛНЕНИЮ:
       Если это раздел "Техника безопасности", опирайся на СП и ГОСТ.
@@ -433,6 +458,18 @@ export async function generateSectionContent(
         inlineData: { mimeType: project.posDoc.mimeType, data: project.posDoc.data } 
     });
     parts.push({ text: "ВНИМАНИЕ: Это файл ПОС. Используй его решения приоритетно." });
+  }
+  
+  // Добавляем файлы базы ГЭСН в контекст
+  if (project.gesnDocs && project.gesnDocs.length > 0) {
+      project.gesnDocs.forEach(doc => {
+          if (SUPPORTED_MIME_TYPES.includes(doc.mimeType) || doc.mimeType.includes('text') || doc.mimeType.includes('json') || doc.mimeType.includes('csv') || doc.mimeType.includes('pdf')) {
+               parts.push({
+                  inlineData: { mimeType: doc.mimeType, data: doc.data }
+              });
+              parts.push({ text: `ЭТО ФАЙЛ БАЗЫ ДАННЫХ (ГЭСН/ФЕР): ${doc.name}. ИСПОЛЬЗУЙ ЕГО ДЛЯ ПОДБОРА РАСЦЕНОК.` });
+          }
+      });
   }
 
   // Фильтруем документы, оставляя только поддерживаемые типы, чтобы избежать ошибки 400
@@ -459,10 +496,29 @@ export async function generateSectionContent(
     config: {
       temperature: 0.1,
       topP: 0.95,
+      // Enable Google Search to find real equipment specs and norms
+      tools: [{ googleSearch: {} }],
       // Reduced thinking budget to save tokens and avoid TPM limits
       thinkingConfig: { thinkingBudget: 2048 }
     },
   }), 5, 8000);
 
-  return response.text || "Ошибка: модель вернула пустой ответ. Попробуйте сгенерировать раздел повторно.";
+  let content = response.text || "Ошибка: модель вернула пустой ответ. Попробуйте сгенерировать раздел повторно.";
+
+  // Extract grounding chunks and append to text as a reference list
+  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (groundingChunks && groundingChunks.length > 0) {
+    const references: string[] = [];
+    groundingChunks.forEach((chunk: any) => {
+        if (chunk.web && chunk.web.uri && chunk.web.title) {
+            references.push(`- [${chunk.web.title}](${chunk.web.uri})`);
+        }
+    });
+
+    if (references.length > 0) {
+        content += "\n\n**Использованные источники (Web):**\n" + references.join("\n");
+    }
+  }
+
+  return content;
 }

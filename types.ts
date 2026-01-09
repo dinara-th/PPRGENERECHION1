@@ -58,6 +58,7 @@ export interface ProjectData {
   workingDocCode: string;
   posDoc?: WorkingDoc; // Added POS document
   estimateDoc?: WorkingDoc; // Added Estimate document
+  gesnDocs: WorkingDoc[]; // Changed to array for multiple files
   roleDeveloper: string;
   roleClientChiefEngineer: string;
   roleAuthorSupervision: string;
