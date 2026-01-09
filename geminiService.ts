@@ -1,14 +1,25 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { ProjectData, DocumentType, ReferenceFile, WorkingDoc } from "./types";
+import { ProjectData, DocumentType, ReferenceFile, WorkingDoc, TkGroup } from "./types";
+import * as XLSX from "xlsx";
 
 // Список типов MIME, которые официально поддерживаются Gemini API для inlineData
+// Добавляем Excel типы, которые мы будем конвертировать вручную перед отправкой
 const SUPPORTED_MIME_TYPES = [
   'application/pdf',
   'image/png',
   'image/jpeg',
   'image/webp',
   'image/heic',
-  'image/heif'
+  'image/heif',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel' // .xls
+];
+
+const EXCEL_MIME_TYPES = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv'
 ];
 
 /**
@@ -18,6 +29,22 @@ function cleanJsonString(text: string): string {
   if (!text) return "";
   // Remove ```json ... ``` or ``` ... ``` wrappers
   return text.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+}
+
+/**
+ * Helper function to parse Excel/CSV data to string
+ */
+function parseExcelData(base64Data: string, mimeType: string): string {
+    try {
+        const workbook = XLSX.read(base64Data, { type: 'base64' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        // Convert to CSV as it is token-efficient and structured enough for LLM
+        return XLSX.utils.sheet_to_csv(worksheet);
+    } catch (e) {
+        console.error("Error parsing Excel file:", e);
+        return "";
+    }
 }
 
 /**
@@ -107,18 +134,27 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-3-pro-preview';
+
+  let parts: any[] = [];
+
+  if (EXCEL_MIME_TYPES.includes(mimeType)) {
+    const csvContent = parseExcelData(fileData, mimeType);
+    parts = [
+        { text: "Вот содержимое документа (преобразовано из Excel/CSV):" },
+        { text: csvContent }
+    ];
+  } else {
+    parts = [
+        { inlineData: { data: fileData, mimeType } }
+    ];
+  }
+
+  parts.push({ text: "Проанализируй этот строительный документ (чертеж или РД). Извлеки: 1. Шифр документа. 2. Полное название документа. 3. Название проекта. 4. Название объекта строительства. 5. Адрес объекта. 6. Заказчик (организация). 7. Подрядчик/Генподрядчик (организация). 8. Перечень основных видов работ. Верни JSON." });
   
   try {
     const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
       model,
-      contents: [
-        {
-          parts: [
-            { inlineData: { data: fileData, mimeType } },
-            { text: "Проанализируй этот строительный документ (чертеж или РД). Извлеки: 1. Шифр документа. 2. Полное название документа. 3. Название проекта. 4. Название объекта строительства. 5. Адрес объекта. 6. Заказчик (организация). 7. Подрядчик/Генподрядчик (организация). 8. Перечень основных видов работ. Верни JSON." }
-          ]
-        }
-      ],
+      contents: [ { parts } ],
       config: {
         responseMimeType: "application/json",
         thinkingConfig: { thinkingBudget: 2000 },
@@ -164,17 +200,23 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-3-pro-preview';
 
+  let parts: any[] = [];
+  if (EXCEL_MIME_TYPES.includes(mimeType)) {
+      const csvContent = parseExcelData(fileData, mimeType);
+      parts = [
+          { text: "Вот содержимое ПОС (из Excel/CSV):" },
+          { text: csvContent }
+      ];
+  } else {
+      parts = [{ inlineData: { data: fileData, mimeType } }];
+  }
+  
+  parts.push({ text: "Ты эксперт ПТО. Проанализируй файл ПОС (Проект Организации Строительства). Извлеки только общие данные: Название проекта, Адрес объекта, Наименование объекта строительства. Список работ извлекать НЕ НУЖНО. Верни JSON." });
+
   try {
     const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
       model,
-      contents: [
-        {
-          parts: [
-            { inlineData: { data: fileData, mimeType } },
-            { text: "Ты эксперт ПТО. Проанализируй файл ПОС (Проект Организации Строительства). Извлеки только общие данные: Название проекта, Адрес объекта, Наименование объекта строительства. Список работ извлекать НЕ НУЖНО. Верни JSON." }
-          ]
-        }
-      ],
+      contents: [ { parts } ],
       config: {
         responseMimeType: "application/json",
         thinkingConfig: { thinkingBudget: 2000 },
@@ -209,7 +251,7 @@ export async function extractWorksFromEstimate(
   catalog: any
 ): Promise<{ selectedWorks: string[]; projectName?: string; objectName?: string; location?: string; client?: string; contractor?: string } | null> {
   if (!SUPPORTED_MIME_TYPES.includes(mimeType)) {
-    throw new Error(`Тип файла ${mimeType} не поддерживается для AI-анализа. Пожалуйста, используйте PDF версию сметы.`);
+    throw new Error(`Тип файла ${mimeType} не поддерживается для AI-анализа. Пожалуйста, используйте PDF версию сметы или Excel.`);
   }
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -225,25 +267,42 @@ export async function extractWorksFromEstimate(
     });
   });
 
+  let parts: any[] = [];
+  if (EXCEL_MIME_TYPES.includes(mimeType)) {
+      const csvContent = parseExcelData(fileData, mimeType);
+      parts = [
+          { text: "Вот содержимое сметы (из Excel/CSV). Внимательно изучи колонки с кодами расценок." },
+          { text: csvContent }
+      ];
+  } else {
+      parts = [{ inlineData: { data: fileData, mimeType } }];
+  }
+
+  parts.push({ text: `Ты профессиональный инженер-сметчик.
+            Твоя цель: Детально проанализировать смету и извлечь все строительные работы.
+            
+            КРИТЕРИЙ ПОИСКА РАБОТ:
+            Любая строка сметы, содержащая код расценки из сборников ГЭСН, ФЕР, ТЕР (например, "ГЭСН 01-01...", "ФЕР06-...", "ТЕР..."), ЯВЛЯЕТСЯ РАБОТОЙ.
+            Обязательно найди их все.
+            
+            ЗАДАЧА:
+            1. Извлеки метаданные: Проект, Объект, Адрес, Заказчик, Подрядчик.
+            2. Найди ВСЕ позиции с кодами ГЭСН/ФЕР/ТЕР/ЕНиР.
+            3. Извлеки их полные наименования из колонки "Наименование работ и затрат".
+            4. Приведи названия к чистому, техническому виду (удали лишние объемы, цены, но сохрани марку бетона, группу грунта и т.д., если это важно для технологии).
+            5. СРАВНЕНИЕ С КАТАЛОГОМ:
+               - Если извлеченная работа явно соответствует позиции из нашего каталога (список ниже) — верни название из каталога.
+               - Если работы нет в каталоге, но она ЕСТЬ В СМЕТЕ с кодом ГЭСН — ВЕРНИ ЕЁ КАК ЕСТЬ (в очищенном виде). Не отбрасывай работы, которых нет в каталоге!
+            
+            СПРАВОЧНЫЙ КАТАЛОГ (для унификации, но не для ограничения):
+            ${allAvailableWorks.join('\n')}
+            
+            Верни результат в формате JSON.` });
+
   try {
     const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
       model,
-      contents: [
-        {
-          parts: [
-            { inlineData: { data: fileData, mimeType } },
-            { text: `Ты инженер-сметчик. Проанализируй сметную ведомость. 
-            1. Найди Название стройки (проекта), Объект и Адрес (если есть).
-            2. Найди наименование Заказчика и Подрядчика в шапке документа.
-            3. Сопоставь позиции сметы с нашим каталогом видов работ. Выбери только те названия из каталога, которые реально присутствуют в смете.
-            
-            КАТАЛОГ:
-            ${allAvailableWorks.join('\n')}
-            
-            Верни результат в формате JSON.` }
-          ]
-        }
-      ],
+      contents: [ { parts } ],
       config: {
         responseMimeType: "application/json",
         thinkingConfig: { thinkingBudget: 4000 },
@@ -277,6 +336,74 @@ export async function extractWorksFromEstimate(
 }
 
 /**
+ * Analyzes a list of works and groups them into logical Technological Maps (TK).
+ */
+export async function suggestWorkGrouping(works: string[]): Promise<TkGroup[]> {
+    if (!works || works.length === 0) return [];
+
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const model = 'gemini-3-pro-preview';
+
+    const prompt = `
+        Ты главный инженер ПТО. У тебя есть список строительных работ.
+        Твоя задача: Оптимизировать количество Технологических Карт (ТК).
+        
+        ОБЪЕДИНИ однородные работы в общие группы.
+        
+        Примеры:
+        - "Прокладка труб д50", "Прокладка труб д100", "Монтаж фасонных частей" -> Группа: "Монтаж технологических трубопроводов".
+        - "Грунтовка стен", "Шпатлевка стен", "Окраска стен" -> Группа: "Отделочные работы (стены)".
+        - "Разработка грунта", "Обратная засыпка" -> Группа: "Земляные работы".
+        
+        СПИСОК РАБОТ:
+        ${JSON.stringify(works)}
+        
+        Верни JSON массив объектов. Каждый объект - это Группа.
+    `;
+
+    try {
+        const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
+            model,
+            contents: [{ text: prompt }],
+            config: {
+                responseMimeType: "application/json",
+                thinkingConfig: { thinkingBudget: 2000 },
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            title: { type: Type.STRING, description: "Название общей ТК (Группы)" },
+                            works: { 
+                                type: Type.ARRAY, 
+                                items: { type: Type.STRING },
+                                description: "Список работ из исходного списка, входящих в эту группу" 
+                            }
+                        },
+                        required: ["title", "works"]
+                    }
+                }
+            }
+        }), 3, 5000);
+
+        const text = response.text;
+        if (text) {
+            const rawGroups = JSON.parse(cleanJsonString(text));
+            // Add unique IDs to groups
+            return rawGroups.map((g: any, index: number) => ({
+                id: `group-${Date.now()}-${index}`,
+                title: g.title,
+                works: g.works
+            }));
+        }
+    } catch (e) {
+        console.error("Grouping error:", e);
+        throw e;
+    }
+    return [];
+}
+
+/**
  * Validates consistency between uploaded documents.
  */
 export async function validateProjectDocs(
@@ -293,18 +420,33 @@ export async function validateProjectDocs(
   let docCount = 0;
 
   if (rdDoc && SUPPORTED_MIME_TYPES.includes(rdDoc.mimeType)) {
-    parts.push({ inlineData: { mimeType: rdDoc.mimeType, data: rdDoc.data } });
-    parts.push({ text: `Документ 1: РД (${rdDoc.name})` });
+    if (EXCEL_MIME_TYPES.includes(rdDoc.mimeType)) {
+        parts.push({ text: `Документ 1: РД (${rdDoc.name}) - Контент из Excel:` });
+        parts.push({ text: parseExcelData(rdDoc.data, rdDoc.mimeType) });
+    } else {
+        parts.push({ inlineData: { mimeType: rdDoc.mimeType, data: rdDoc.data } });
+        parts.push({ text: `Документ 1: РД (${rdDoc.name})` });
+    }
     docCount++;
   }
   if (estimateDoc && SUPPORTED_MIME_TYPES.includes(estimateDoc.mimeType)) {
-    parts.push({ inlineData: { mimeType: estimateDoc.mimeType, data: estimateDoc.data } });
-    parts.push({ text: `Документ 2: Смета (${estimateDoc.name})` });
+    if (EXCEL_MIME_TYPES.includes(estimateDoc.mimeType)) {
+        parts.push({ text: `Документ 2: Смета (${estimateDoc.name}) - Контент из Excel:` });
+        parts.push({ text: parseExcelData(estimateDoc.data, estimateDoc.mimeType) });
+    } else {
+        parts.push({ inlineData: { mimeType: estimateDoc.mimeType, data: estimateDoc.data } });
+        parts.push({ text: `Документ 2: Смета (${estimateDoc.name})` });
+    }
     docCount++;
   }
   if (posDoc && SUPPORTED_MIME_TYPES.includes(posDoc.mimeType)) {
-    parts.push({ inlineData: { mimeType: posDoc.mimeType, data: posDoc.data } });
-    parts.push({ text: `Документ 3: ПОС (${posDoc.name})` });
+    if (EXCEL_MIME_TYPES.includes(posDoc.mimeType)) {
+        parts.push({ text: `Документ 3: ПОС (${posDoc.name}) - Контент из Excel:` });
+        parts.push({ text: parseExcelData(posDoc.data, posDoc.mimeType) });
+    } else {
+        parts.push({ inlineData: { mimeType: posDoc.mimeType, data: posDoc.data } });
+        parts.push({ text: `Документ 3: ПОС (${posDoc.name})` });
+    }
     docCount++;
   }
 
@@ -375,7 +517,8 @@ export async function generateSectionContent(
   project: ProjectData,
   sectionTitle: string,
   context: string,
-  referenceFiles: ReferenceFile[] = []
+  referenceFiles: ReferenceFile[],
+  groupWorks?: string[] // Optional list of works if this is a Group TK
 ): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-3-pro-preview';
@@ -391,16 +534,41 @@ export async function generateSectionContent(
 
   let specificInstruction = "";
   let gesnPromptInstruction = "";
+  let estimatePromptInstruction = "";
+  let groupingInstruction = "";
+
+  // Logic for Grouped TKs
+  if (groupWorks && groupWorks.length > 0) {
+      groupingInstruction = `
+      ВНИМАНИЕ: Это СВОДНАЯ Технологическая карта.
+      Название ТК: "${sectionTitle}".
+      Она должна охватывать следующие конкретные виды работ из сметы:
+      ${groupWorks.map(w => `- ${w}`).join('\n')}
+      
+      В тексте раздела обязательно учти специфику КАЖДОГО из перечисленных видов работ.
+      Например, если в группу входят трубы разных диаметров или разные слои покрытия, опиши технологию для всех вариантов.
+      `;
+  }
   
   // Logic for GESN database usage
   if (project.gesnDocs && project.gesnDocs.length > 0) {
       gesnPromptInstruction = `
       ВАЖНО: К проекту приложена БАЗА ДАННЫХ ГЭСН/ФЕР (в количестве ${project.gesnDocs.length} файл(ов)).
       ПРИОРИТЕТНАЯ ЗАДАЧА:
-      1. Найди в этих файлах соответствующие расценки для видов работ: ${project.workType.join(', ')}.
+      1. Найди в этих файлах соответствующие расценки для видов работ: ${groupWorks ? groupWorks.join(', ') : project.workType.join(', ')}.
       2. Извлеки оттуда нормативную трудоемкость (чел-час) и состав машин/механизмов.
       3. Используй эти ТОЧНЫЕ данные при формировании раздела ресурсов и технологии.
       4. Укажи коды найденных расценок (например, ГЭСН 01-01-001-01).
+      `;
+  }
+
+  // Logic for Estimate Priority
+  if (project.estimateDoc) {
+      estimatePromptInstruction = `
+      КРИТИЧЕСКИ ВАЖНО: К проекту приложена СМЕТА.
+      Для разделов, касающихся Ресурсов, Механизмов, Техники и Трудоемкости, данные из СМЕТЫ являются ПРИОРИТЕТНЫМИ и ГЛАВНЫМИ.
+      Игнорируй данные из других документов, если они противоречат смете в части состава машин и трудозатрат.
+      Используй точные наименования механизмов из сметы.
       `;
   }
 
@@ -433,17 +601,20 @@ export async function generateSectionContent(
       ВИДЫ РАБОТ И СРОКИ:
       ${deadlinesList}
       
-      ИСХОДНЫЕ ДАННЫЕ:
-      1. Если передан файл ПОС (Проект Организации Строительства) — это ОСНОВНОЙ ДОКУМЕНТ. Сроки, методы, техника — брать оттуда.
-      2. Рабочая документация (РД) — для детализации.
-      3. Приложены файлы из "Базы знаний" (ГОСТ, СП) — для ссылок на нормы.
-      4. Используй Поиск Google для проверки актуальных версий СП/ГОСТ и технических характеристик оборудования (краны, экскаваторы), если они упоминаются.
+      ИСХОДНЫЕ ДАННЫЕ И ИЕРАРХИЯ ДОКУМЕНТОВ:
+      1. СМЕТА (если загружена) — КЛЮЧЕВОЙ ДОКУМЕНТ для определения видов работ, трудоемкости и используемых механизмов.
+      2. ПОС (Проект Организации Строительства) — основной документ для технологии, сроков и общих схем организации.
+      3. Рабочая документация (РД) — для геометрических параметров и детализации.
+      4. База знаний (ГОСТ, СП) — для нормативных ссылок.
+      5. Используй Поиск Google для проверки актуальных версий СП/ГОСТ и технических характеристик оборудования (краны, экскаваторы), если они упоминаются.
       
+      ${estimatePromptInstruction}
       ${gesnPromptInstruction}
+      ${groupingInstruction}
 
       ИНСТРУКЦИЯ ПО НАПОЛНЕНИЮ:
       Если это раздел "Техника безопасности", опирайся на СП и ГОСТ.
-      Если это "Технология работ", детально распиши последовательность для: ${project.workType.join(', ')}.
+      Если это "Технология работ", детально распиши последовательность для: ${groupWorks ? groupWorks.join(', ') : project.workType.join(', ')}.
 
       ${specificInstruction}
 
@@ -452,32 +623,61 @@ export async function generateSectionContent(
 
   const parts: any[] = [{ text: promptText }];
 
+  // Добавляем СМЕТУ в контекст как приоритетный документ
+  if (project.estimateDoc && SUPPORTED_MIME_TYPES.includes(project.estimateDoc.mimeType)) {
+    if (EXCEL_MIME_TYPES.includes(project.estimateDoc.mimeType)) {
+        parts.push({ text: "ВНИМАНИЕ: ЭТО ФАЙЛ СМЕТЫ (из Excel). ОН ЯВЛЯЕТСЯ КЛЮЧЕВЫМ ДЛЯ ОПРЕДЕЛЕНИЯ ТРУДОЕМКОСТИ И МЕХАНИЗМОВ." });
+        parts.push({ text: parseExcelData(project.estimateDoc.data, project.estimateDoc.mimeType) });
+    } else {
+        parts.push({ 
+            inlineData: { mimeType: project.estimateDoc.mimeType, data: project.estimateDoc.data } 
+        });
+        parts.push({ text: "ВНИМАНИЕ: ЭТО ФАЙЛ СМЕТЫ. ОН ЯВЛЯЕТСЯ КЛЮЧЕВЫМ ДЛЯ ОПРЕДЕЛЕНИЯ ТРУДОЕМКОСТИ И МЕХАНИЗМОВ." });
+    }
+  }
+
   // Добавляем ПОС в контекст
   if (project.posDoc && SUPPORTED_MIME_TYPES.includes(project.posDoc.mimeType)) {
-    parts.push({ 
-        inlineData: { mimeType: project.posDoc.mimeType, data: project.posDoc.data } 
-    });
-    parts.push({ text: "ВНИМАНИЕ: Это файл ПОС. Используй его решения приоритетно." });
+    if (EXCEL_MIME_TYPES.includes(project.posDoc.mimeType)) {
+        parts.push({ text: "ВНИМАНИЕ: Это файл ПОС (из Excel). Используй его решения приоритетно для сроков и организации." });
+        parts.push({ text: parseExcelData(project.posDoc.data, project.posDoc.mimeType) });
+    } else {
+        parts.push({ 
+            inlineData: { mimeType: project.posDoc.mimeType, data: project.posDoc.data } 
+        });
+        parts.push({ text: "ВНИМАНИЕ: Это файл ПОС. Используй его решения приоритетно для сроков и организации." });
+    }
   }
   
   // Добавляем файлы базы ГЭСН в контекст
   if (project.gesnDocs && project.gesnDocs.length > 0) {
       project.gesnDocs.forEach(doc => {
           if (SUPPORTED_MIME_TYPES.includes(doc.mimeType) || doc.mimeType.includes('text') || doc.mimeType.includes('json') || doc.mimeType.includes('csv') || doc.mimeType.includes('pdf')) {
-               parts.push({
-                  inlineData: { mimeType: doc.mimeType, data: doc.data }
-              });
-              parts.push({ text: `ЭТО ФАЙЛ БАЗЫ ДАННЫХ (ГЭСН/ФЕР): ${doc.name}. ИСПОЛЬЗУЙ ЕГО ДЛЯ ПОДБОРА РАСЦЕНОК.` });
+               if (EXCEL_MIME_TYPES.includes(doc.mimeType)) {
+                   parts.push({ text: `ЭТО ФАЙЛ БАЗЫ ДАННЫХ (ГЭСН/ФЕР из Excel): ${doc.name}. ИСПОЛЬЗУЙ ЕГО ДЛЯ ПОДБОРА РАСЦЕНОК.` });
+                   parts.push({ text: parseExcelData(doc.data, doc.mimeType) });
+               } else {
+                   parts.push({
+                      inlineData: { mimeType: doc.mimeType, data: doc.data }
+                  });
+                  parts.push({ text: `ЭТО ФАЙЛ БАЗЫ ДАННЫХ (ГЭСН/ФЕР): ${doc.name}. ИСПОЛЬЗУЙ ЕГО ДЛЯ ПОДБОРА РАСЦЕНОК.` });
+               }
           }
       });
   }
 
-  // Фильтруем документы, оставляя только поддерживаемые типы, чтобы избежать ошибки 400
+  // Фильтруем документы, оставляя только поддерживаемые типы
   if (project.workingDocs && project.workingDocs.length > 0) {
     project.workingDocs
       .filter(doc => SUPPORTED_MIME_TYPES.includes(doc.mimeType))
       .forEach(doc => {
-        parts.push({ inlineData: { mimeType: doc.mimeType, data: doc.data } });
+        if (EXCEL_MIME_TYPES.includes(doc.mimeType)) {
+            // Usually RD are PDFs, but if Excel is passed, treat as text
+            parts.push({ text: `Документ РД (${doc.name}) содержимое:` });
+            parts.push({ text: parseExcelData(doc.data, doc.mimeType) });
+        } else {
+            parts.push({ inlineData: { mimeType: doc.mimeType, data: doc.data } });
+        }
       });
   }
 
@@ -485,7 +685,12 @@ export async function generateSectionContent(
     referenceFiles
       .filter(ref => SUPPORTED_MIME_TYPES.includes(ref.mimeType))
       .forEach(ref => {
-        parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+        if (EXCEL_MIME_TYPES.includes(ref.mimeType)) {
+             parts.push({ text: `Справочный файл (${ref.name}):` });
+             parts.push({ text: parseExcelData(ref.data, ref.mimeType) });
+        } else {
+             parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+        }
       });
   }
 

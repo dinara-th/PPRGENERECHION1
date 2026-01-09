@@ -43,6 +43,12 @@ export interface ContractorEntry {
   developer: string;
 }
 
+export interface TkGroup {
+  id: string;
+  title: string; // Название общей ТК (например, "Монтаж трубопроводов")
+  works: string[]; // Список конкретных работ, входящих в эту ТК
+}
+
 export interface ProjectData {
   id: string;
   version: number;
@@ -52,19 +58,20 @@ export interface ProjectData {
   client: string;
   contractor: string;
   location: string;
-  workType: string[];
+  workType: string[]; // Полный список работ (исходный)
+  tkGroups: TkGroup[]; // Группировка работ по ТК
   workDeadlines: Record<string, { start: string; end: string }>;
   workingDocName: string;
   workingDocCode: string;
-  posDoc?: WorkingDoc; // Added POS document
-  estimateDoc?: WorkingDoc; // Added Estimate document
-  gesnDocs: WorkingDoc[]; // Changed to array for multiple files
+  posDoc?: WorkingDoc; 
+  estimateDoc?: WorkingDoc; 
+  gesnDocs: WorkingDoc[]; 
   roleDeveloper: string;
   roleClientChiefEngineer: string;
   roleAuthorSupervision: string;
   date: string;
   workingDocs: WorkingDoc[];
-  tkMap: Record<string, DocSection[]>;
+  tkMap: Record<string, DocSection[]>; // Key is now Group ID (or Work Name for legacy)
   aiWorksFromEstimate: string[];
   aiWorksFromDocs: string[];
 }
