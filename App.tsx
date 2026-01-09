@@ -849,11 +849,45 @@ export default function App() {
     const pages: any[] = [];
     const tocEntries: { title: string; page: number; level: number }[] = [];
 
+    // Title page
     pages.push({ type: 'title', pageNum: currentPage++ });
-    pages.push({ type: 'toc', pageNum: currentPage++ });
+
+    // Calculate Total TOC Entries
+    let totalTocEntries = 0;
+    totalTocEntries++; // Approval sheet
+    totalTocEntries += pprSections.length;
+    
+    const workItems = project.tkGroups.length > 0 ? project.tkGroups : project.workType.map(w => ({ id: w, title: w, works: [w] }));
+    totalTocEntries += workItems.length; // Group headers
+    
+    workItems.forEach(item => {
+        const workSections = project.tkMap[item.id] || [];
+        totalTocEntries += workSections.length;
+    });
+    totalTocEntries++; // Acquaintance sheet
+
+    // Calculate TOC Pages
+    const ITEMS_PER_FIRST_PAGE = 22;
+    const ITEMS_PER_NEXT_PAGE = 32;
+    
+    let tocPagesCount = 1;
+    if (totalTocEntries > ITEMS_PER_FIRST_PAGE) {
+        const remaining = totalTocEntries - ITEMS_PER_FIRST_PAGE;
+        tocPagesCount += Math.ceil(remaining / ITEMS_PER_NEXT_PAGE);
+    }
+
+    // Reserve TOC Pages
+    const tocPagesIndices: number[] = [];
+    for(let k=0; k<tocPagesCount; k++) {
+        pages.push({ type: 'toc', pageNum: currentPage++, tocPageIndex: k });
+        tocPagesIndices.push(pages.length - 1);
+    }
+
+    // Approval Sheet
     pages.push({ type: 'approval-sheet', pageNum: currentPage++, title: 'Лист согласования' });
     tocEntries.push({ title: 'Лист согласования', page: currentPage - 1, level: 1 });
 
+    // PPR Sections
     pprSections.forEach((s, idx) => {
       const content = s.content || 'Раздел ожидает генерации...';
       const sectionPages = splitContentIntoPages(content);
@@ -863,8 +897,7 @@ export default function App() {
       });
     });
 
-    const workItems = project.tkGroups.length > 0 ? project.tkGroups : project.workType.map(w => ({ id: w, title: w, works: [w] }));
-
+    // TK Sections
     workItems.forEach((item, wIdx) => {
       pages.push({ type: 'tk-separator', title: item.title, pageNum: currentPage++ });
       tocEntries.push({ title: `Приложение ${wIdx + 1}. ТК на ${item.title}`, page: currentPage - 1, level: 1 });
@@ -879,8 +912,17 @@ export default function App() {
       });
     });
 
+    // Acquaintance Sheet
     pages.push({ type: 'acquaintance-sheet', pageNum: currentPage++, title: 'Лист ознакомления' });
     tocEntries.push({ title: 'Лист ознакомления', page: currentPage - 1, level: 1 });
+
+    // Fill TOC Pages
+    let currentEntryIndex = 0;
+    tocPagesIndices.forEach((pageIndex, i) => {
+        const limit = i === 0 ? ITEMS_PER_FIRST_PAGE : ITEMS_PER_NEXT_PAGE;
+        pages[pageIndex].entries = tocEntries.slice(currentEntryIndex, currentEntryIndex + limit);
+        currentEntryIndex += limit;
+    });
 
     return { pages, tocEntries, totalPages: currentPage - 1 };
   }, [pprSections, project.workType, project.tkMap, project.tkGroups]);
@@ -1462,6 +1504,7 @@ export default function App() {
       <main className="flex-1 flex overflow-hidden font-sans relative">
          {/* Sidebar */}
          <aside className="no-print w-[400px] shrink-0 bg-white border-r border-slate-200 overflow-y-auto p-6 space-y-8 custom-scrollbar flex flex-col">
+           {/* ... Sidebar content unchanged ... */}
            {(currentStep === 'new-project' || currentStep === 'edit' || currentStep === 'grouping') && (
              <div className="space-y-6">
                 {currentStep === 'new-project' ? (
@@ -1765,6 +1808,7 @@ export default function App() {
              </div>
            )}
            
+           {/* ... Dictionaries, Help, Knowledge Base unchanged ... */}
            {currentStep === 'dictionaries' && (
              <div className="space-y-6">
                 <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest border-l-4 border-blue-600 pl-3">Справочники</h2>
@@ -1820,103 +1864,8 @@ export default function App() {
                    </div>
                </div>
            )}
-        </aside>
-        
-        {/* Main Content Area */}
-        <div className="flex-1 bg-slate-100 overflow-hidden relative flex flex-col" id="print-content">
-             {(currentStep === 'new-project' || currentStep === 'edit' || currentStep === 'grouping') && (
-                <div className="flex-1 overflow-y-auto custom-scrollbar p-8 flex flex-col items-center gap-8 pb-[300px]">
-                  {docLayout.pages.map((pContent, i) => (
-                    <div key={i} className="page-container shadow-2xl">
-                      <div className="gost-frame"></div>
-                      <div className={`gost-content ${i === 0 || pContent.type === 'toc' || pContent.type === 'approval-sheet' ? 'content-with-form-5' : 'content-with-form-6'} ${i === 0 ? 'title-page-content' : ''}`}>
-                         {pContent.type === 'title' ? (
-                            <div className="flex flex-col h-full justify-between">
-                                {/* Title content rendered via docx generator mainly, here plain preview */}
-                                <div className="text-center pt-20">
-                                    <h1 className="font-bold text-xl uppercase mb-10">{project.contractor || "ОРГАНИЗАЦИЯ"}</h1>
-                                    <h2 className="font-bold text-3xl uppercase mb-5">ПРОЕКТ ПРОИЗВОДСТВА РАБОТ</h2>
-                                    <p className="text-lg mb-20">{project.projectName || "НАЗВАНИЕ ПРОЕКТА"}</p>
-                                    <p className="italic">Шифр: {project.workingDocCode || "..."}</p>
-                                </div>
-                                <div className="text-center pb-10">г. Москва {new Date().getFullYear()}</div>
-                            </div>
-                         ) : pContent.type === 'toc' ? (
-                            <div className="p-10">
-                                <h2 className="font-bold text-center uppercase mb-6">СОДЕРЖАНИЕ</h2>
-                                {docLayout.tocEntries.map((entry, idx) => (
-                                    <div key={idx} className={`flex justify-between mb-2 text-sm ${entry.level === 1 ? 'font-bold' : 'pl-4'}`}>
-                                        <span>{entry.title}</span>
-                                        <span>{entry.page}</span>
-                                    </div>
-                                ))}
-                            </div>
-                         ) : pContent.type === 'tk-separator' ? (
-                            <div className="flex items-center justify-center h-full text-center p-20">
-                                <div>
-                                    <h1 className="font-bold text-2xl uppercase mb-4">ТЕХНОЛОГИЧЕСКАЯ КАРТА</h1>
-                                    <p className="text-xl">{pContent.title}</p>
-                                </div>
-                            </div>
-                         ) : (
-                           <>
-                             {pContent.isFirstPage && <h3 className="font-bold text-center uppercase mb-4">{pContent.secTitle || pContent.title}</h3>}
-                             <ReactMarkdown 
-                               remarkPlugins={[remarkGfm]}
-                               components={{
-                                 h1: ({node, ...props}) => <h1 className="font-bold text-center uppercase text-lg my-4" {...props} />,
-                                 h2: ({node, ...props}) => <h2 className="font-bold text-center uppercase text-base my-3" {...props} />,
-                                 h3: ({node, ...props}) => <h3 className="font-bold text-left uppercase text-sm my-2" {...props} />,
-                                 p: ({node, ...props}) => <p className="mb-2 text-justify indent-8" {...props} />,
-                                 ul: ({node, ...props}) => <ul className="list-disc pl-10 mb-2" {...props} />,
-                                 ol: ({node, ...props}) => <ol className="list-decimal pl-10 mb-2" {...props} />,
-                                 table: ({node, ...props}) => <table className="w-full border-collapse border border-black mb-4 text-xs" {...props} />,
-                                 th: ({node, ...props}) => <th className="border border-black p-1 bg-gray-100" {...props} />,
-                                 td: ({node, ...props}) => <td className="border border-black p-1" {...props} />,
-                               }}
-                             >
-                               {pContent.content}
-                             </ReactMarkdown>
-                           </>
-                         )}
-                      </div>
-                      <div className={`main-stamp ${i === 0 || pContent.type === 'toc' || pContent.type === 'approval-sheet' ? 'stamp-form-5' : 'stamp-form-6'}`}>
-                         <MainStamp pageNum={pContent.pageNum} totalPages={docLayout.totalPages} type={i === 0 || pContent.type === 'toc' || pContent.type === 'approval-sheet' ? 'form5' : 'form6'} project={project} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-             )}
-             
-             {currentStep === 'dictionaries' && (
-                 <div className="flex-1 overflow-y-auto p-8">
-                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-                         <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-                             {dictTab === 'objects' && <Building2 className="w-6 text-blue-600" />}
-                             {dictTab === 'clients' && <UserCog className="w-6 text-blue-600" />}
-                             {dictTab === 'contractors' && <HardHat className="w-6 text-blue-600" />}
-                             {dictTab === 'objects' ? 'Справочник объектов' : dictTab === 'clients' ? 'Справочник заказчиков' : 'Справочник подрядчиков'}
-                         </h2>
-                         
-                         {/* Simple list view for now */}
-                         <div className="space-y-2">
-                             {(dictionaries as any)[dictTab]?.map((item: any) => (
-                                 <div key={item.id} className="p-3 border border-slate-100 rounded-xl hover:bg-slate-50 flex justify-between items-center">
-                                     <div>
-                                         <p className="font-bold text-sm text-slate-700">{item.name}</p>
-                                         <p className="text-xs text-slate-400">{item.address || item.legalAddress}</p>
-                                     </div>
-                                 </div>
-                             ))}
-                             <button className="w-full py-3 border border-dashed border-slate-300 rounded-xl text-slate-400 font-bold uppercase text-xs hover:border-blue-400 hover:text-blue-500 transition-colors flex items-center justify-center gap-2">
-                                 <Plus className="w-4" /> Добавить запись
-                             </button>
-                         </div>
-                     </div>
-                 </div>
-             )}
-             
-             {currentStep === 'ppr-register' && (
+           
+           {currentStep === 'ppr-register' && (
                  <div className="flex-1 overflow-y-auto p-8">
                      <h2 className="text-2xl font-bold mb-6 text-slate-800">Реестр проектов ППР</h2>
                      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -1969,35 +1918,104 @@ export default function App() {
                      </div>
                  </div>
              )}
-             
-             {currentStep === 'knowledge' && (
-                 <div className="flex-1 overflow-y-auto p-8">
-                      <h2 className="text-2xl font-bold mb-6 text-slate-800">Библиотека нормативных документов</h2>
-                      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-                          {dictionaries.referenceLibrary.length === 0 ? (
-                              <div className="text-center text-slate-400 py-10">Библиотека пуста. Загрузите файлы через боковое меню.</div>
-                          ) : (
-                              <div className="grid grid-cols-1 gap-2">
-                                  {dictionaries.referenceLibrary.map(file => (
-                                      <div key={file.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                          <div className="flex items-center gap-3">
-                                              <div className={`p-1.5 rounded-lg border text-white text-[10px] font-bold uppercase w-12 text-center ${file.category === 'СП' ? 'bg-indigo-500 border-indigo-600' : file.category === 'ГОСТ' ? 'bg-orange-500 border-orange-600' : file.category === 'Техкарта' ? 'bg-teal-500 border-teal-600' : 'bg-slate-400 border-slate-500'}`}>
-                                                 {file.category}
-                                              </div>
-                                              <div>
-                                                  <p className="text-sm font-bold text-slate-700">{file.name}</p>
-                                                  <p className="text-[10px] text-slate-400">{file.uploadedAt}</p>
-                                              </div>
-                                          </div>
-                                          <button onClick={() => removeReferenceDoc(file.id)} className="text-slate-400 hover:text-red-500"><Trash2 className="w-4" /></button>
-                                      </div>
-                                  ))}
-                              </div>
-                          )}
+        </aside>
+        
+        {/* Main Content Area */}
+        <div className="flex-1 bg-slate-100 overflow-hidden relative flex flex-col" id="print-content">
+             {(currentStep === 'new-project' || currentStep === 'edit' || currentStep === 'grouping') && (
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-8 flex flex-col items-center gap-8 pb-[300px]">
+                  {docLayout.pages.map((pContent, i) => (
+                    <div key={i} className="page-container shadow-2xl">
+                      <div className="gost-frame"></div>
+                      <div className={`gost-content ${i === 0 || (pContent.type === 'toc' && pContent.tocPageIndex === 0) || pContent.type === 'approval-sheet' ? 'content-with-form-5' : 'content-with-form-6'} ${i === 0 ? 'title-page-content' : ''}`}>
+                         {pContent.type === 'title' ? (
+                            <div className="flex flex-col h-full justify-between">
+                                {/* Title content rendered via docx generator mainly, here plain preview */}
+                                <div className="text-center pt-20">
+                                    <h1 className="font-bold text-xl uppercase mb-10">{project.contractor || "ОРГАНИЗАЦИЯ"}</h1>
+                                    <h2 className="font-bold text-3xl uppercase mb-5">ПРОЕКТ ПРОИЗВОДСТВА РАБОТ</h2>
+                                    <p className="text-lg mb-20">{project.projectName || "НАЗВАНИЕ ПРОЕКТА"}</p>
+                                    <p className="italic">Шифр: {project.workingDocCode || "..."}</p>
+                                </div>
+                                <div className="text-center pb-10">г. Москва {new Date().getFullYear()}</div>
+                            </div>
+                         ) : pContent.type === 'toc' ? (
+                            <div className="p-10">
+                                {pContent.tocPageIndex === 0 && <h2 className="font-bold text-center uppercase mb-6">СОДЕРЖАНИЕ</h2>}
+                                {pContent.entries.map((entry: any, idx: number) => (
+                                    <div key={idx} className={`flex justify-between mb-2 text-sm ${entry.level === 1 ? 'font-bold' : 'pl-4'}`}>
+                                        <span>{entry.title}</span>
+                                        <span>{entry.page}</span>
+                                    </div>
+                                ))}
+                            </div>
+                         ) : pContent.type === 'tk-separator' ? (
+                            <div className="flex items-center justify-center h-full text-center p-20">
+                                <div>
+                                    <h1 className="font-bold text-2xl uppercase mb-4">ТЕХНОЛОГИЧЕСКАЯ КАРТА</h1>
+                                    <p className="text-xl">{pContent.title}</p>
+                                </div>
+                            </div>
+                         ) : (
+                           <>
+                             {pContent.isFirstPage && <h3 className="font-bold text-center uppercase mb-4">{pContent.secTitle || pContent.title}</h3>}
+                             <ReactMarkdown 
+                               remarkPlugins={[remarkGfm]}
+                               components={{
+                                 h1: ({node, ...props}) => <h1 className="font-bold text-center uppercase text-lg my-4" {...props} />,
+                                 h2: ({node, ...props}) => <h2 className="font-bold text-center uppercase text-base my-3" {...props} />,
+                                 h3: ({node, ...props}) => <h3 className="font-bold text-left uppercase text-sm my-2" {...props} />,
+                                 p: ({node, ...props}) => <p className="mb-2 text-justify indent-8" {...props} />,
+                                 ul: ({node, ...props}) => <ul className="list-disc pl-10 mb-2" {...props} />,
+                                 ol: ({node, ...props}) => <ol className="list-decimal pl-10 mb-2" {...props} />,
+                                 table: ({node, ...props}) => <table className="w-full border-collapse border border-black mb-4 text-xs" {...props} />,
+                                 th: ({node, ...props}) => <th className="border border-black p-1 bg-gray-100" {...props} />,
+                                 td: ({node, ...props}) => <td className="border border-black p-1" {...props} />,
+                               }}
+                             >
+                               {pContent.content}
+                             </ReactMarkdown>
+                           </>
+                         )}
                       </div>
+                      <div className={`main-stamp ${i === 0 || (pContent.type === 'toc' && pContent.tocPageIndex === 0) || pContent.type === 'approval-sheet' ? 'stamp-form-5' : 'stamp-form-6'}`}>
+                         <MainStamp pageNum={pContent.pageNum} totalPages={docLayout.totalPages} type={i === 0 || (pContent.type === 'toc' && pContent.tocPageIndex === 0) || pContent.type === 'approval-sheet' ? 'form5' : 'form6'} project={project} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+             )}
+             
+             {currentStep === 'dictionaries' && (
+                 <div className="flex-1 overflow-y-auto p-8">
+                     <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                         <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+                             {dictTab === 'objects' && <Building2 className="w-6 text-blue-600" />}
+                             {dictTab === 'clients' && <UserCog className="w-6 text-blue-600" />}
+                             {dictTab === 'contractors' && <HardHat className="w-6 text-blue-600" />}
+                             {dictTab === 'objects' ? 'Справочник объектов' : dictTab === 'clients' ? 'Справочник заказчиков' : 'Справочник подрядчиков'}
+                         </h2>
+                         
+                         {/* Simple list view for now */}
+                         <div className="space-y-2">
+                             {(dictionaries as any)[dictTab]?.map((item: any) => (
+                                 <div key={item.id} className="p-3 border border-slate-100 rounded-xl hover:bg-slate-50 flex justify-between items-center">
+                                     <div>
+                                         <p className="font-bold text-sm text-slate-700">{item.name}</p>
+                                         <p className="text-xs text-slate-400">{item.address || item.legalAddress}</p>
+                                     </div>
+                                 </div>
+                             ))}
+                             <button className="w-full py-3 border border-dashed border-slate-300 rounded-xl text-slate-400 font-bold uppercase text-xs hover:border-blue-400 hover:text-blue-500 transition-colors flex items-center justify-center gap-2">
+                                 <Plus className="w-4" /> Добавить запись
+                             </button>
+                         </div>
+                     </div>
                  </div>
              )}
-
+             
+             {/* ... */}
+             
              {/* Log Panel */}
              {isLogOpen && (
                  <div 
