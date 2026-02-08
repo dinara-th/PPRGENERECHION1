@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, Header, SectionType, PageOrientation, HeadingLevel, PageNumber, PageBorderDisplay, PageBorderOffsetFrom } from "docx";
+import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle, Footer, SectionType, PageNumber } from "docx";
 import FileSaver from "file-saver";
 import { 
   FileText, 
@@ -369,7 +369,7 @@ const generateWordDocument = (project: ProjectData, pprSections: DocSection[], o
                  new TableRow({
                      height: { value: 850, rule: "exact" }, 
                      children: [
-                         new TableCell({ columnSpan: 6, width: { size: 55, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ text: "", ...textSmall })] }), 
+                         new TableCell({ columnSpan: 6, width: { size: 55, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ children: [new TextRun({ text: "", ...textSmall })] })] }),
                          new TableCell({ columnSpan: 3, width: { size: 45, type: WidthType.PERCENTAGE }, borders: borderStyle, verticalAlign: "center", children: [new Paragraph({ children: [new TextRun({ text: docCipher, ...textBold, size: 28 })], alignment: AlignmentType.CENTER })] })
                      ]
                  }),
@@ -381,15 +381,15 @@ const generateWordDocument = (project: ProjectData, pprSections: DocSection[], o
                              new Paragraph({ children: [new TextRun({ text: "Пров.", ...textSmall }), new TextRun({ text: "  " + project.roleClientChiefEngineer, ...textBold })] })
                          ]}),
                          new TableCell({ columnSpan: 4, width: { size: 37, type: WidthType.PERCENTAGE }, borders: borderStyle, verticalAlign: "center", children: [new Paragraph({ children: [new TextRun({ text: project.objectName, ...textSmall, italics: true })], alignment: AlignmentType.CENTER })] }),
-                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ text: "Стадия", ...textSmall, alignment: AlignmentType.CENTER }), new Paragraph({ text: "ППР", ...textBold, alignment: AlignmentType.CENTER })] }),
-                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ text: "Лист", ...textSmall, alignment: AlignmentType.CENTER }), new Paragraph({ children: [PageNumber.CURRENT], ...textBold, alignment: AlignmentType.CENTER })] }),
-                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ text: "Листов", ...textSmall, alignment: AlignmentType.CENTER }), new Paragraph({ children: [PageNumber.TOTAL_PAGES], ...textBold, alignment: AlignmentType.CENTER })] }),
+                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ children: [new TextRun({ text: "Стадия", ...textSmall })], alignment: AlignmentType.CENTER }), new Paragraph({ children: [new TextRun({ text: "ППР", ...textBold })], alignment: AlignmentType.CENTER })] }),
+                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ children: [new TextRun({ text: "Лист", ...textSmall })], alignment: AlignmentType.CENTER }), new Paragraph({ children: [new TextRun({ children: [PageNumber.CURRENT], ...textBold })], alignment: AlignmentType.CENTER })] }),
+                         new TableCell({ width: { size: 10, type: WidthType.PERCENTAGE }, borders: borderStyle, children: [new Paragraph({ children: [new TextRun({ text: "Листов", ...textSmall })], alignment: AlignmentType.CENTER }), new Paragraph({ children: [new TextRun({ children: [PageNumber.TOTAL_PAGES], ...textBold })], alignment: AlignmentType.CENTER })] }),
                      ]
                  }),
                  new TableRow({
                      height: { value: 850, rule: "exact" },
                      children: [
-                         new TableCell({ columnSpan: 2, width: { size: 18, type: WidthType.PERCENTAGE }, borders: borderStyle, verticalAlign: "center", children: [new Paragraph({ text: "Н.контр.", ...textSmall, alignment: AlignmentType.CENTER })] }),
+                         new TableCell({ columnSpan: 2, width: { size: 18, type: WidthType.PERCENTAGE }, borders: borderStyle, verticalAlign: "center", children: [new Paragraph({ children: [new TextRun({ text: "Н.контр.", ...textSmall })], alignment: AlignmentType.CENTER })] }),
                          new TableCell({ columnSpan: 7, width: { size: 82, type: WidthType.PERCENTAGE }, borders: borderStyle, verticalAlign: "center", children: [new Paragraph({ children: [new TextRun({ text: project.contractor, ...textBold, size: 24 })], alignment: AlignmentType.CENTER })] })
                      ]
                  })
@@ -447,48 +447,48 @@ const generateWordDocument = (project: ProjectData, pprSections: DocSection[], o
     };
 
     const titlePageContent = [
-        new Paragraph({ text: "", spacing: { after: 3000 } }), // Top spacer
-        new Paragraph({ text: "УТВЕРЖДАЮ", alignment: AlignmentType.RIGHT, ...textBold }),
-        new Paragraph({ text: "Руководитель: ___________________", alignment: AlignmentType.RIGHT, ...textNormal }),
-        new Paragraph({ text: `________________ / ${project.roleDeveloper || 'Ф.И.О.'}`, alignment: AlignmentType.RIGHT, ...textNormal }),
-        new Paragraph({ text: "«___» _____________ 202__ г.", alignment: AlignmentType.RIGHT, spacing: { after: 3000 }, ...textNormal }),
-        
-        new Paragraph({ text: project.contractor || "ОРГАНИЗАЦИЯ", alignment: AlignmentType.CENTER, bold: true, size: 28, spacing: { after: 1000 }, font: "Times New Roman" }),
-        new Paragraph({ text: "ПРОЕКТ ПРОИЗВОДСТВА РАБОТ", alignment: AlignmentType.CENTER, bold: true, size: 48, spacing: { after: 500 }, font: "Times New Roman" }),
-        new Paragraph({ text: project.projectName || "НАЗВАНИЕ ПРОЕКТА", alignment: AlignmentType.CENTER, bold: true, size: 36, spacing: { after: 2000 }, font: "Times New Roman" }),
-        
-        new Paragraph({ text: `Объект: ${project.objectName || '...' }`, alignment: AlignmentType.CENTER, ...textNormal }),
-        new Paragraph({ text: `Основание: ${docCipher}`, alignment: AlignmentType.CENTER, italics: true, spacing: { after: 4000 }, ...textNormal }),
-        
-        new Paragraph({ text: "г. Москва 2024", alignment: AlignmentType.CENTER, ...textNormal, spacing: { before: 2000 } })
+        new Paragraph({ children: [], spacing: { after: 3000 } }), // Top spacer
+        new Paragraph({ children: [new TextRun({ text: "УТВЕРЖДАЮ", ...textBold })], alignment: AlignmentType.RIGHT }),
+        new Paragraph({ children: [new TextRun({ text: "Руководитель: ___________________", ...textNormal })], alignment: AlignmentType.RIGHT }),
+        new Paragraph({ children: [new TextRun({ text: `________________ / ${project.roleDeveloper || 'Ф.И.О.'}`, ...textNormal })], alignment: AlignmentType.RIGHT }),
+        new Paragraph({ children: [new TextRun({ text: "«___» _____________ 202__ г.", ...textNormal })], alignment: AlignmentType.RIGHT, spacing: { after: 3000 } }),
+
+        new Paragraph({ children: [new TextRun({ text: project.contractor || "ОРГАНИЗАЦИЯ", font: "Times New Roman", bold: true, size: 28 })], alignment: AlignmentType.CENTER, spacing: { after: 1000 } }),
+        new Paragraph({ children: [new TextRun({ text: "ПРОЕКТ ПРОИЗВОДСТВА РАБОТ", font: "Times New Roman", bold: true, size: 48 })], alignment: AlignmentType.CENTER, spacing: { after: 500 } }),
+        new Paragraph({ children: [new TextRun({ text: project.projectName || "НАЗВАНИЕ ПРОЕКТА", font: "Times New Roman", bold: true, size: 36 })], alignment: AlignmentType.CENTER, spacing: { after: 2000 } }),
+
+        new Paragraph({ children: [new TextRun({ text: `Объект: ${project.objectName || '...' }`, ...textNormal })], alignment: AlignmentType.CENTER }),
+        new Paragraph({ children: [new TextRun({ text: `Основание: ${docCipher}`, ...textNormal, italics: true })], alignment: AlignmentType.CENTER, spacing: { after: 4000 } }),
+
+        new Paragraph({ children: [new TextRun({ text: `г. Москва ${new Date().getFullYear()}`, ...textNormal })], alignment: AlignmentType.CENTER, spacing: { before: 2000 } })
     ];
 
     const mainContentChildren: any[] = [];
     
-    mainContentChildren.push(new Paragraph({ text: "СОДЕРЖАНИЕ", bold: true, size: 32, alignment: AlignmentType.CENTER, font: "Times New Roman", spacing: { after: 400 } }));
+    mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: "СОДЕРЖАНИЕ", font: "Times New Roman", bold: true, size: 32 })], alignment: AlignmentType.CENTER, spacing: { after: 400 } }));
     pprSections.forEach((s, i) => {
-        mainContentChildren.push(new Paragraph({ text: `${i + 1}. ${s.title}`, ...textNormal, spacing: { after: 100 } }));
+        mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: `${i + 1}. ${s.title}`, ...textNormal })], spacing: { after: 100 } }));
     });
-    
+
     // Updated TOC to show Groups instead of single works if groups exist
     const workItems = project.tkGroups.length > 0 ? project.tkGroups : project.workType.map(w => ({ title: w, id: w }));
-    
+
     workItems.forEach((w, i) => {
-        mainContentChildren.push(new Paragraph({ text: `Приложение ${i + 1}. ТК: ${w.title}`, ...textNormal, spacing: { after: 100 } }));
+        mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: `Приложение ${i + 1}. ТК: ${w.title}`, ...textNormal })], spacing: { after: 100 } }));
     });
-    mainContentChildren.push(new Paragraph({ text: "", pageBreakBefore: true }));
+    mainContentChildren.push(new Paragraph({ children: [], pageBreakBefore: true }));
 
     pprSections.forEach((s, i) => {
-        mainContentChildren.push(new Paragraph({ text: `${i + 1}. ${s.title}`, bold: true, size: 28, font: "Times New Roman", spacing: { after: 200 }, alignment: AlignmentType.CENTER }));
+        mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: `${i + 1}. ${s.title}`, font: "Times New Roman", bold: true, size: 28 })], spacing: { after: 200 }, alignment: AlignmentType.CENTER }));
         mainContentChildren.push(...parseMarkdownToDocx(s.content));
-        mainContentChildren.push(new Paragraph({ text: "", spacing: { after: 400 } }));
+        mainContentChildren.push(new Paragraph({ children: [], spacing: { after: 400 } }));
     });
 
     workItems.forEach((w) => {
-        mainContentChildren.push(new Paragraph({ text: `Технологическая карта: ${w.title}`, bold: true, size: 32, font: "Times New Roman", pageBreakBefore: true, alignment: AlignmentType.CENTER, spacing: { after: 400 } }));
+        mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: `Технологическая карта: ${w.title}`, font: "Times New Roman", bold: true, size: 32 })], pageBreakBefore: true, alignment: AlignmentType.CENTER, spacing: { after: 400 } }));
         const tkSections = project.tkMap[w.id] || [];
         tkSections.forEach((s) => {
-            mainContentChildren.push(new Paragraph({ text: s.title, bold: true, size: 26, font: "Times New Roman", spacing: { before: 200, after: 200 } }));
+            mainContentChildren.push(new Paragraph({ children: [new TextRun({ text: s.title, font: "Times New Roman", bold: true, size: 26 })], spacing: { before: 200, after: 200 } }));
             mainContentChildren.push(...parseMarkdownToDocx(s.content));
         });
     });
@@ -521,9 +521,7 @@ const generateWordDocument = (project: ProjectData, pprSections: DocSection[], o
                             pageBorderTop: { style: BorderStyle.SINGLE, size: 6, space: 0 },
                             pageBorderRight: { style: BorderStyle.SINGLE, size: 6, space: 0 },
                             pageBorderBottom: { style: BorderStyle.SINGLE, size: 6, space: 0 },
-                            pageBorderLeft: { style: BorderStyle.SINGLE, size: 6, space: 0 },
-                            display: PageBorderDisplay.ALL_PAGES,
-                            offsetFrom: PageBorderOffsetFrom.PAGE
+                            pageBorderLeft: { style: BorderStyle.SINGLE, size: 6, space: 0 }
                         }
                     },
                     titlePage: true 
@@ -821,28 +819,34 @@ export default function App() {
       }]);
   }, []);
 
-  const startResizing = useCallback((e: React.MouseEvent) => {
-      e.preventDefault();
-      isResizingRef.current = true;
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'ns-resize';
-  }, []);
+  const handleMouseMoveRef = useRef<(e: MouseEvent) => void>(() => {});
+  const handleMouseUpRef = useRef<(e: MouseEvent) => void>(() => {});
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
+  handleMouseMoveRef.current = (e: MouseEvent) => {
       if (!isResizingRef.current) return;
-      const newHeight = window.innerHeight - e.clientY - 40; 
+      const newHeight = window.innerHeight - e.clientY - 40;
       if (newHeight > 100 && newHeight < 600) {
           setLogHeight(newHeight);
       }
-  }, []);
+  };
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+  handleMouseUpRef.current = (e: MouseEvent) => {
       isResizingRef.current = false;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mousemove', stableMouseMove);
+      document.removeEventListener('mouseup', stableMouseUp);
       document.body.style.cursor = 'default';
-  }, [handleMouseMove]);
+  };
+
+  const stableMouseMove = useCallback((e: MouseEvent) => handleMouseMoveRef.current(e), []);
+  const stableMouseUp = useCallback((e: MouseEvent) => handleMouseUpRef.current(e), []);
+
+  const startResizing = useCallback((e: React.MouseEvent) => {
+      e.preventDefault();
+      isResizingRef.current = true;
+      document.addEventListener('mousemove', stableMouseMove);
+      document.addEventListener('mouseup', stableMouseUp);
+      document.body.style.cursor = 'ns-resize';
+  }, [stableMouseMove, stableMouseUp]);
 
   const docLayout = useMemo(() => {
     let currentPage = 1;
@@ -1316,11 +1320,11 @@ export default function App() {
                         estimateDoc: { name: file.name, data: base64, mimeType: file.type },
                         aiWorksFromEstimate: data.selectedWorks,
                         workType: mergedWorks, // Auto-add works from estimate
-                        projectName: data.projectName || data.projectName || prev.projectName,
-                        objectName: data.objectName || data.objectName || prev.objectName,
-                        location: data.location || data.location || prev.location,
-                        client: data.client || data.client || prev.client,
-                        contractor: data.contractor || data.contractor || prev.contractor
+                        projectName: data.projectName || prev.projectName,
+                        objectName: data.objectName || prev.objectName,
+                        location: data.location || prev.location,
+                        client: data.client || prev.client,
+                        contractor: data.contractor || prev.contractor
                     };
                     // Init map for new works if grouping not active
                     if (prev.tkGroups.length === 0) {
@@ -1438,8 +1442,24 @@ export default function App() {
   };
 
   const addToDictionary = (type: 'client' | 'contractor', name: string) => {
-    // Basic implementation just to satisfy typescript for now
-    // In real app would check duplicates
+    if (!name.trim()) return;
+    setDictionaries(prev => {
+      if (type === 'client') {
+        const exists = prev.clients.some(c => c.name === name);
+        if (exists) return prev;
+        return {
+          ...prev,
+          clients: [...prev.clients, { id: Date.now().toString(), name, legalAddress: '', chiefEngineer: '' }]
+        };
+      } else {
+        const exists = prev.contractors.some(c => c.name === name);
+        if (exists) return prev;
+        return {
+          ...prev,
+          contractors: [...prev.contractors, { id: Date.now().toString(), name, legalAddress: '', developer: '' }]
+        };
+      }
+    });
   };
 
   const handleValidateDocuments = async () => {
@@ -1955,6 +1975,59 @@ export default function App() {
                                     <h1 className="font-bold text-2xl uppercase mb-4">ТЕХНОЛОГИЧЕСКАЯ КАРТА</h1>
                                     <p className="text-xl">{pContent.title}</p>
                                 </div>
+                            </div>
+                         ) : pContent.type === 'approval-sheet' ? (
+                            <div className="p-10">
+                                <h2 className="font-bold text-center uppercase mb-8">ЛИСТ СОГЛАСОВАНИЯ</h2>
+                                <table className="w-full border-collapse border border-black text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th className="border border-black p-2 w-[5%]">№</th>
+                                            <th className="border border-black p-2 w-[30%]">Должность</th>
+                                            <th className="border border-black p-2 w-[25%]">Ф.И.О.</th>
+                                            <th className="border border-black p-2 w-[20%]">Подпись</th>
+                                            <th className="border border-black p-2 w-[20%]">Дата</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {[1,2,3,4,5].map(n => (
+                                            <tr key={n}>
+                                                <td className="border border-black p-2 text-center">{n}</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                         ) : pContent.type === 'acquaintance-sheet' ? (
+                            <div className="p-10">
+                                <h2 className="font-bold text-center uppercase mb-8">ЛИСТ ОЗНАКОМЛЕНИЯ</h2>
+                                <p className="text-sm mb-6 text-justify">С содержанием настоящего проекта производства работ ознакомлены:</p>
+                                <table className="w-full border-collapse border border-black text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th className="border border-black p-2 w-[5%]">№</th>
+                                            <th className="border border-black p-2 w-[30%]">Ф.И.О.</th>
+                                            <th className="border border-black p-2 w-[25%]">Должность</th>
+                                            <th className="border border-black p-2 w-[20%]">Подпись</th>
+                                            <th className="border border-black p-2 w-[20%]">Дата</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                                            <tr key={n}>
+                                                <td className="border border-black p-2 text-center">{n}</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                                <td className="border border-black p-2">&nbsp;</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </div>
                          ) : (
                            <>

@@ -34,7 +34,7 @@ function cleanJsonString(text: string): string {
 /**
  * Helper function to parse Excel/CSV data to string
  */
-function parseExcelData(base64Data: string, mimeType: string): string {
+function parseExcelData(base64Data: string, _mimeType?: string): string {
     try {
         const workbook = XLSX.read(base64Data, { type: 'base64' });
         const firstSheetName = workbook.SheetNames[0];
@@ -185,7 +185,7 @@ export async function extractDocInfo(fileData: string, mimeType: string): Promis
   } catch (e: any) {
     console.error("Extraction error:", e);
     // Rethrow known errors so UI can handle them
-    if (e.message.includes("429") || e.message.includes("403") || e.message.includes("VPN")) throw e;
+    if (e?.message?.includes("429") || e?.message?.includes("403") || e?.message?.includes("VPN")) throw e;
   }
   return null;
 }
@@ -236,7 +236,7 @@ export async function extractPosData(fileData: string, mimeType: string): Promis
     if (text) return JSON.parse(cleanJsonString(text));
   } catch (e: any) {
     console.error("POS Extraction error:", e);
-    if (e.message.includes("429") || e.message.includes("403") || e.message.includes("VPN")) throw e;
+    if (e?.message?.includes("429") || e?.message?.includes("403") || e?.message?.includes("VPN")) throw e;
   }
   return null;
 }
@@ -697,7 +697,7 @@ export async function generateSectionContent(
   // Use higher maxRetries for generation as it's critical
   const response = await retryOperation<GenerateContentResponse>(() => ai.models.generateContent({
     model,
-    contents: { parts },
+    contents: [{ parts }],
     config: {
       temperature: 0.1,
       topP: 0.95,

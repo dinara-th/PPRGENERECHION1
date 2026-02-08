@@ -12,7 +12,7 @@ export interface WorkingDoc {
 
 export interface ReferenceFile extends WorkingDoc {
   id: string;
-  category: 'ГЭСН' | 'ФЕР' | 'СП' | 'ГОСТ' | 'Прочее';
+  category: 'ГЭСН' | 'ФЕР' | 'СП' | 'ГОСТ' | 'Техкарта' | 'Прочее';
   uploadedAt: string;
 }
 
